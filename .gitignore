@@ -41,9 +41,10 @@ logs/*.log
 logs/*.json
 
 # Screenshots
-screenshots/*.png
-screenshots/*.jpg
-screenshots/*.jpeg
+backend/screenshots/*.png
+backend/screenshots/*.jpg
+backend/screenshots/*.jpeg
 
 .DS_Store
 Thumbs.db
+
