@@ -1,0 +1,39 @@
+# Axela - AI Computer Control Agent
+
+pyautogui>=0.9.54
+keyboard>=0.13.5
+mouse>=0.7.1
+
+opencv-python>=4.8.0
+pillow>=10.0.0
+numpy>=1.24.0
+
+SpeechRecognition>=3.10.0
+pyttsx3>=2.90
+pyaudio>=0.2.11
+
+psutil>=5.9.0
+win32gui>=221.6; sys_platform == "win32"
+win32api>=221.6; sys_platform == "win32"
+win32con>=221.6; sys_platform == "win32"
+pywin32>=306; sys_platform == "win32"
+
+pyperclip>=1.8.2
+
+pyyaml>=6.0
+jsonschema>=4.17.0
+
+requests>=2.31.0
+
+openai>=1.3.0
+python-dotenv>=1.0.0
+
+pytesseract>=0.3.10
+easyocr>=1.7.0
+
+regex>=2023.6.3
+
+pytest>=7.4.0
+pytest-cov>=4.1.0
+black>=23.7.0
+flake8>=6.0.0
