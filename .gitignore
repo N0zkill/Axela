@@ -24,3 +24,26 @@ dist-ssr
 *.sw?
 
 .env
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+.env
+.env.*
+venv/
+.venv/
+env/
+
+logs/*.log
+logs/*.json
+
+# Screenshots
+screenshots/*.png
+screenshots/*.jpg
+screenshots/*.jpeg
+
+.DS_Store
+Thumbs.db
