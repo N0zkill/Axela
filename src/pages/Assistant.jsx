@@ -1,29 +1,58 @@
-
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { MessageCircle, Settings, Plus, Trash2, FileText } from "lucide-react";
-import { Conversation, UserSettings } from "@/api/entities";
-import { InvokeLLM } from "@/api/integrations";
+import { MessageCircle, Settings, Plus, Trash2, FileText, Sparkles, Circle, ChevronLeft, ChevronRight } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 import ChatMessage from "../components/chat/ChatMessage";
 import ChatInput from "../components/chat/ChatInput";
 import SettingsPanel from "../components/settings/SettingsPanel";
 import ScriptManagementPanel from "../components/scripts/ScriptManagementPanel";
+import { useAxelaAPI } from "../hooks/useAxelaAPI";
 
 export default function AssistantPage() {
   const [activeTab, setActiveTab] = useState("chat");
   const [conversations, setConversations] = useState([]);
   const [currentConversation, setCurrentConversation] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [settings, setSettings] = useState(null);
+  const [mode, setMode] = useState("ai"); // "manual", "ai", or "chat"
   const messagesEndRef = useRef(null);
-  
+
+  const axelaAPI = useAxelaAPI();
+
+  const loadMode = useCallback(async () => {
+    try {
+      const response = await axelaAPI.getConfig();
+      console.log('>>> Config response:', response);
+      console.log('>>> Mode from config:', response?.config?.mode);
+      // API returns { config: { mode: ... } }
+      const newMode = response?.config?.mode || "ai";
+      console.log('>>> Setting mode to:', newMode);
+      setMode(newMode);
+    } catch (error) {
+      console.error("Error loading mode:", error);
+      setMode("ai"); // Fallback to AI mode on error
+    }
+  }, [axelaAPI]);
+
   useEffect(() => {
-    loadData();
-  }, []);
+    if (conversations.length === 0) {
+      createNewConversation();
+    }
+    loadMode();
+
+    const handleConfigChange = (event) => {
+      if (event.detail.section === 'app' && event.detail.settings.mode) {
+        loadMode();
+      }
+    };
+
+    window.addEventListener('axela-config-changed', handleConfigChange);
+
+    return () => {
+      window.removeEventListener('axela-config-changed', handleConfigChange);
+    };
+  }, [loadMode]);
 
   useEffect(() => {
     scrollToBottom();
@@ -33,281 +62,331 @@ export default function AssistantPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const loadData = async () => {
-    try {
-      const [conversationsData, settingsData] = await Promise.all([
-        Conversation.list("-updated_date"),
-        UserSettings.list()
-      ]);
-      
-      setConversations(conversationsData);
-      if (conversationsData.length > 0) {
-        setCurrentConversation(conversationsData[0]);
-      }
-      
-      if (settingsData.length > 0) {
-        setSettings(settingsData[0]);
-      }
-    } catch (error) {
-      console.error("Error loading data:", error);
-    }
-  };
-
-  const createNewConversation = async () => {
-    const newConv = await Conversation.create({
+  const createNewConversation = () => {
+    const newConv = {
+      id: Date.now().toString(),
       title: "New Conversation",
-      messages: []
-    });
+      messages: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      isActive: true
+    };
     setConversations(prev => [newConv, ...prev]);
     setCurrentConversation(newConv);
   };
 
-  const deleteConversation = async (convId) => {
-    await Conversation.delete(convId);
+  const deleteConversation = (convId) => {
     setConversations(prev => prev.filter(c => c.id !== convId));
     if (currentConversation?.id === convId) {
       const remaining = conversations.filter(c => c.id !== convId);
-      setCurrentConversation(remaining.length > 0 ? remaining[0] : null);
+      if (remaining.length > 0) {
+        setCurrentConversation(remaining[0]);
+      } else {
+        createNewConversation();
+      }
     }
   };
 
-  const sendMessage = async (content, type = "text") => {
-    if (!currentConversation) {
-      const newConv = await Conversation.create({
-        title: "New Conversation",
-        messages: []
+  const cycleMode = async (direction) => {
+    const modes = ["manual", "ai", "chat"];
+    const currentIndex = modes.indexOf(mode);
+    const newIndex = direction === "next"
+      ? (currentIndex + 1) % modes.length
+      : (currentIndex - 1 + modes.length) % modes.length;
+    const newMode = modes[newIndex];
+
+    try {
+      await fetch('http://127.0.0.1:8000/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ section: "app", settings: { mode: newMode } })
       });
-      setConversations(prev => [newConv, ...prev]);
-      setCurrentConversation(newConv);
-      // Wait for state to update before proceeding
-      setTimeout(() => proceedWithMessage(content, type, newConv), 0);
-    } else {
-      proceedWithMessage(content, type, currentConversation);
+
+      setMode(newMode);
+    } catch (error) {
+      console.error("Error updating mode:", error);
     }
   };
-  
-  const proceedWithMessage = async (content, type, conversation) => {
+
+  const sendMessage = async (content) => {
+    if (!content.trim()) return;
+
+    let conv = currentConversation;
+    if (!conv) {
+      conv = {
+        id: Date.now().toString(),
+        title: content.substring(0, 50),
+        messages: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        isActive: true
+      };
+      setConversations(prev => [conv, ...prev]);
+      setCurrentConversation(conv);
+    }
+
     const userMessage = {
       id: Date.now().toString(),
       content,
-      sender: "user",
-      timestamp: new Date().toISOString(),
-      type
+      role: "user",
+      timestamp: new Date().toISOString()
     };
 
-    const updatedMessages = [...(conversation.messages || []), userMessage];
-    const updatedConv = { ...conversation, messages: updatedMessages };
-    
-    // Optimistically update UI
-    setCurrentConversation(updatedConv);
-    setConversations(prev => prev.map(c => c.id === conversation.id ? updatedConv : c));
+    const updatedMessages = [...(conv.messages || []), userMessage];
+    const updatedConv = { ...conv, messages: updatedMessages, updatedAt: new Date().toISOString() };
 
+    setCurrentConversation(updatedConv);
+    setConversations(prev => prev.map(c => c.id === conv.id ? updatedConv : c));
     setIsProcessing(true);
 
     try {
-      const personalityPrompts = {
-        professional: "You are a professional AI assistant. Be helpful, precise, and formal.",
-        friendly: "You are a friendly and warm AI assistant. Be conversational and empathetic.",
-        creative: "You are a creative and imaginative AI assistant. Be innovative and think outside the box.",
-        concise: "You are a concise AI assistant. Give brief, to-the-point responses."
-      };
-      
-      const latestSettings = settings || (await UserSettings.list())[0];
-      const personalityPrompt = latestSettings?.assistant_personality 
-        ? personalityPrompts[latestSettings.assistant_personality]
-        : personalityPrompts.friendly;
-
-      const response = await InvokeLLM({
-        prompt: `${personalityPrompt}\n\nUser: ${content}\n\nAssistant:`,
-        add_context_from_internet: false
-      });
+      console.log('>>> Current mode state before sending:', mode);
+      console.log('>>> Mode type:', typeof mode);
+      console.log('>>> Mode value check:', mode === 'chat', mode === 'ai', mode === 'manual');
+      const result = await axelaAPI.executeCommand(content, mode);
 
       const assistantMessage = {
         id: (Date.now() + 1).toString(),
-        content: response,
-        sender: "assistant",
+        content: result.success
+          ? result.message
+          : `Error: ${result.message || 'Command failed'}`,
+        role: "assistant",
         timestamp: new Date().toISOString(),
-        type: "text"
+        success: result.success,
+        data: result.data
       };
 
       const finalMessages = [...updatedMessages, assistantMessage];
-      const finalConv = { ...updatedConv, messages: finalMessages };
-      
-      await Conversation.update(conversation.id, {
+      const finalConv = {
+        ...updatedConv,
         messages: finalMessages,
-        title: finalMessages.length === 2 ? content.substring(0, 50) : conversation.title
-      });
+        updatedAt: new Date().toISOString(),
+        title: finalMessages.length === 2 ? content.substring(0, 50) : updatedConv.title
+      };
 
-      // Update UI with final data from server
       setCurrentConversation(finalConv);
-      setConversations(prev => prev.map(c => c.id === conversation.id ? finalConv : c));
-
-      if (latestSettings?.auto_speak_responses) {
-        speakText(response);
-      }
+      setConversations(prev => prev.map(c => c.id === conv.id ? finalConv : c));
 
     } catch (error) {
-      console.error("Error getting AI response:", error);
-    }
+      console.error("Error sending message:", error);
 
-    setIsProcessing(false);
-  };
+      const errorMessage = {
+        id: (Date.now() + 1).toString(),
+        content: `I encountered an error: ${error.message}. Please make sure the Axela backend is running.`,
+        role: "assistant",
+        timestamp: new Date().toISOString(),
+        success: false
+      };
 
-  const speakText = (text) => {
-    if ('speechSynthesis' in window) {
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.8;
-      utterance.pitch = 1;
-      utterance.volume = 0.8;
-      speechSynthesis.speak(utterance);
+      const finalMessages = [...updatedMessages, errorMessage];
+      const finalConv = { ...updatedConv, messages: finalMessages, updatedAt: new Date().toISOString() };
+
+      setCurrentConversation(finalConv);
+      setConversations(prev => prev.map(c => c.id === conv.id ? finalConv : c));
+    } finally {
+      setIsProcessing(false);
     }
   };
 
   return (
-    <div className="flex h-[calc(100vh-89px)] overflow-hidden">
+    <div className="flex h-screen bg-stone-950">
       {/* Sidebar */}
-      <div className="w-80 bg-card/40 backdrop-blur-md border-r flex flex-col transition-colors duration-200">
-        <div className="p-4 border-b">
+      <div className="w-72 flex flex-col bg-stone-900/50 backdrop-blur-xl border-r border-stone-800/50">
+        {/* Header */}
+        <div className="p-6 border-b border-stone-800/50">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-12 h-12 flex items-center justify-center">
+              <img src="/src/assets/logo.png" alt="AXELA" className="w-full h-full object-contain brightness-0 invert" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-white">AXELA</h1>
+              <p className="text-xs text-stone-400">AI Assistant</p>
+            </div>
+          </div>
+
           <Button
             onClick={createNewConversation}
-            className="w-full bg-secondary hover:bg-muted text-secondary-foreground transition-colors duration-200"
-          >
+            className="w-full bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/20 border-0 h-11"
+            size="lg">
             <Plus className="w-4 h-4 mr-2" />
-            New Conversation
+            New Chat
           </Button>
         </div>
 
-        <ScrollArea className="flex-1 p-4 scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent hover:scrollbar-thumb-muted-foreground/40 scrollbar-thumb-rounded-full">
+        {/* Conversations List - Fixed Height */}
+        <div className="flex-1 overflow-y-auto p-3 min-h-0">
           <div className="space-y-2">
             {conversations.map((conv) => (
-              <motion.div
+              <div
                 key={conv.id}
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                className={`p-3 rounded-lg cursor-pointer border transition-all duration-200 group
-                  ${ currentConversation?.id === conv.id
-                    ? "bg-primary/10 border-primary"
-                    : "bg-card/60 hover:bg-muted"
+                className={`group p-3 rounded-xl cursor-pointer transition-all duration-200 ${
+                  currentConversation?.id === conv.id
+                    ? 'bg-orange-500/10 border-2 border-orange-500/30 shadow-sm'
+                    : 'bg-stone-800/30 hover:bg-stone-800/50 border border-transparent'
                 }`}
-                onClick={() => setCurrentConversation(conv)}
-              >
-                <div className="flex items-center justify-between">
+                onClick={() => setCurrentConversation(conv)}>
+
+                <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
-                    <p className="font-medium truncate text-foreground">
-                      {conv.title}
-                    </p>
-                    <p className="text-sm truncate text-primary">
+                    <div className="flex items-center gap-2 mb-1">
+                      <MessageCircle className={`w-3.5 h-3.5 flex-shrink-0 ${
+                        currentConversation?.id === conv.id ? 'text-orange-400' : 'text-stone-500'
+                      }`} />
+                      <h3 className={`font-medium text-sm truncate ${
+                        currentConversation?.id === conv.id ? 'text-orange-100' : 'text-stone-300'
+                      }`}>
+                        {conv.title || 'New Chat'}
+                      </h3>
+                    </div>
+                    <p className="text-xs text-stone-500">
                       {conv.messages?.length || 0} messages
                     </p>
                   </div>
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="opacity-0 group-hover:opacity-100 transition-all duration-200 text-muted-foreground hover:text-destructive hover:bg-destructive/20"
+                    className="opacity-0 group-hover:opacity-100 transition-opacity h-7 w-7"
                     onClick={(e) => {
                       e.stopPropagation();
                       deleteConversation(conv.id);
-                    }}
-                  >
-                    <Trash2 className="w-4 h-4" />
+                    }}>
+                    <Trash2 className="w-3.5 h-3.5 text-stone-400 hover:text-red-400" />
                   </Button>
                 </div>
-              </motion.div>
+              </div>
             ))}
           </div>
-        </ScrollArea>
+        </div>
+
+        {/* Status Footer */}
+        <div className="px-5 py-6 border-t border-stone-800/50 bg-stone-900/30">
+          <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center gap-2">
+              <Circle className={`w-2 h-2 ${axelaAPI.status.connected ? 'fill-orange-500 text-orange-500' : 'fill-red-500 text-red-500'} animate-pulse`} />
+              <span className="text-stone-300 font-medium">
+                {axelaAPI.status.connected ? 'Connected' : 'Disconnected'}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center -space-x-1">
+                <button
+                  onClick={() => cycleMode("prev")}
+                  className="hover:bg-stone-700/50 rounded transition-colors p-0.5"
+                  title="Previous mode"
+                >
+                  <ChevronLeft className="w-3 h-3 text-stone-400 hover:text-orange-400" />
+                </button>
+                <span className="text-orange-400 font-medium text-xs px-2">
+                  {mode === "chat" && "Chat"}
+                  {mode === "ai" && "AI"}
+                  {mode === "manual" && "Manual"}
+                </span>
+                <button
+                  onClick={() => cycleMode("next")}
+                  className="hover:bg-stone-700/50 rounded transition-colors p-0.5"
+                  title="Next mode"
+                >
+                  <ChevronRight className="w-3 h-3 text-stone-400 hover:text-orange-400" />
+                </button>
+              </div>
+              {axelaAPI.status.ai_available && (
+                <Sparkles className="w-4 h-4 text-orange-400" title="AI Available" />
+              )}
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col">
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
-          <div className="border-b bg-card/80 backdrop-blur-md transition-colors duration-200 sticky top-0 z-40">
-            <TabsList className="h-16 w-full flex justify-start bg-transparent p-2">
+      <div className="flex-1 flex flex-col min-w-0">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
+          {/* Tab Header */}
+          <div className="border-b border-stone-800/50 bg-stone-900/30 backdrop-blur-xl px-8 py-4 flex justify-center">
+            <TabsList className="bg-stone-800/50 p-1.5 h-12">
               <TabsTrigger
                 value="chat"
-                className="flex items-center gap-2 px-6 py-3 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground hover:text-foreground transition-all duration-200 font-medium"
-              >
-                <MessageCircle className="w-5 h-5" />
+                className="data-[state=active]:bg-stone-700 data-[state=active]:text-orange-400 px-6 font-medium text-stone-400">
+                <MessageCircle className="w-4 h-4 mr-2" />
                 Chat
               </TabsTrigger>
               <TabsTrigger
                 value="scripts"
-                className="flex items-center gap-2 px-6 py-3 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground hover:text-foreground transition-all duration-200 font-medium"
-              >
-                <FileText className="w-5 h-5" />
+                className="data-[state=active]:bg-stone-700 data-[state=active]:text-orange-400 px-6 font-medium text-stone-400">
+                <FileText className="w-4 h-4 mr-2" />
                 Scripts
               </TabsTrigger>
               <TabsTrigger
                 value="settings"
-                className="ml-auto flex items-center gap-2 px-6 py-3 rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground hover:text-foreground transition-all duration-200 font-medium"
-              >
-                <Settings className="w-5 h-5" />
+                className="data-[state=active]:bg-stone-700 data-[state=active]:text-orange-400 px-6 font-medium text-stone-400">
+                <Settings className="w-4 h-4 mr-2" />
                 Settings
               </TabsTrigger>
             </TabsList>
           </div>
 
-          <TabsContent value="chat" className="flex-1 flex flex-col m-0 bg-background/50 transition-colors duration-200">
-            <div className="flex-1 flex flex-col overflow-hidden">
-              <ScrollArea className="flex-1 max-h-[calc(100vh-280px)] overflow-y-auto scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent hover:scrollbar-thumb-muted-foreground/40 scrollbar-thumb-rounded-full">
-                <div className="max-w-4xl mx-auto p-6">
+          <TabsContent value="chat" className="flex-1 flex flex-col m-0 p-0 min-h-0 data-[state=inactive]:hidden">
+            {/* Messages Area - Fixed Height with Scroll */}
+            <div className="flex-1 overflow-y-auto px-8 py-6 min-h-0">
+              {!currentConversation || currentConversation.messages.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-center">
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="max-w-2xl">
+                    <div className="w-28 h-28 flex items-center justify-center mb-4 mx-auto">
+                      <img src="/src/assets/logo.png" alt="AXELA" className="w-full h-full object-contain brightness-0 invert" />
+                    </div>
+                    <h2 className="text-4xl font-bold mb-3 text-orange-400">
+                      Hello! I'm AXELA
+                    </h2>
+                    <p className="text-lg text-stone-400 mb-8">
+                      Your AI-powered desktop assistant. I can control your computer, execute commands, and help you get things done.
+                    </p>
+                    <div className="flex flex-wrap gap-3 justify-center">
+                      {["Open Calculator", "Take a screenshot", "Open Notepad", "Search for cats"].map((suggestion) => (
+                        <Button
+                          key={suggestion}
+                          variant="outline"
+                          onClick={() => sendMessage(suggestion)}
+                          className="rounded-full border-2 border-stone-700 hover:border-orange-500/50 hover:bg-orange-500/10 text-stone-300 hover:text-orange-400 font-medium px-5 h-11 bg-stone-800/30">
+                          {suggestion}
+                        </Button>
+                      ))}
+                    </div>
+                  </motion.div>
+                </div>
+              ) : (
+                <div className="max-w-4xl mx-auto space-y-4">
                   <AnimatePresence>
-                    {currentConversation?.messages?.length === 0 || !currentConversation ? (
-                      <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="text-center py-20 flex flex-col items-center justify-center min-h-[400px]"
-                      >
-                        <div className="w-20 h-20 bg-primary rounded-full flex items-center justify-center mx-auto mb-6 transition-colors duration-200">
-                          <MessageCircle className="w-10 h-10 text-primary-foreground" />
-                        </div>
-                        <h2 className="text-2xl font-bold mb-4">
-                          Hello! I'm AXELA
-                        </h2>
-                        <p className="mb-8 max-w-md mx-auto text-primary">
-                          I'm your AI personal assistant. Ask me anything or start a conversation!
-                        </p>
-                      </motion.div>
-                    ) : (
-                      <div className="space-y-6 pb-6">
-                        {currentConversation.messages.map((message) => (
-                          <ChatMessage
-                            key={message.id}
-                            message={message}
-                            onSpeak={speakText}
-                          />
-                        ))}
-                      </div>
-                    )}
+                    {currentConversation.messages.map((msg) => (
+                      <ChatMessage key={msg.id} message={msg} />
+                    ))}
                   </AnimatePresence>
                   <div ref={messagesEndRef} />
                 </div>
-              </ScrollArea>
+              )}
             </div>
 
-            <div className="p-6 border-t bg-card/60 backdrop-blur-md transition-colors duration-200 flex-shrink-0">
+            {/* Input Area - Fixed at Bottom */}
+            <div className="px-5 py-3.5 border-t pb-4 border-stone-800/50 bg-stone-900/50 backdrop-blur-xl">
               <div className="max-w-4xl mx-auto">
                 <ChatInput
                   onSendMessage={sendMessage}
                   isProcessing={isProcessing}
-                  disabled={!currentConversation && conversations.length === 0}
+                  disabled={!axelaAPI.status.connected}
                 />
               </div>
             </div>
           </TabsContent>
-          
-          <TabsContent value="scripts" className="flex-1 m-0 bg-background/50">
-            <ScrollArea className="h-full scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent hover:scrollbar-thumb-muted-foreground/40 scrollbar-thumb-rounded-full">
-              <ScriptManagementPanel />
-            </ScrollArea>
+
+          <TabsContent value="scripts" className="flex-1 m-0 overflow-y-auto data-[state=inactive]:hidden">
+            <div className="p-8">
+              <ScriptManagementPanel axelaAPI={axelaAPI} />
+            </div>
           </TabsContent>
 
-          <TabsContent value="settings" className="flex-1 m-0 bg-background/50">
-            <ScrollArea className="h-full scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent hover:scrollbar-thumb-muted-foreground/40 scrollbar-thumb-rounded-full">
-              <div className="pb-6">
-                <SettingsPanel />
-              </div>
-            </ScrollArea>
+          <TabsContent value="settings" className="flex-1 m-0 p-0 overflow-y-auto data-[state=inactive]:hidden">
+            <SettingsPanel axelaAPI={axelaAPI} />
           </TabsContent>
         </Tabs>
       </div>

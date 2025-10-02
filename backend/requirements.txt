@@ -13,9 +13,6 @@ pyttsx3>=2.90
 pyaudio>=0.2.11
 
 psutil>=5.9.0
-win32gui>=221.6; sys_platform == "win32"
-win32api>=221.6; sys_platform == "win32"
-win32con>=221.6; sys_platform == "win32"
 pywin32>=306; sys_platform == "win32"
 
 pyperclip>=1.8.2
@@ -24,6 +21,10 @@ pyyaml>=6.0
 jsonschema>=4.17.0
 
 requests>=2.31.0
+
+# Web API
+fastapi>=0.104.0
+uvicorn>=0.24.0
 
 openai>=1.3.0
 python-dotenv>=1.0.0

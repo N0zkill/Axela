@@ -248,16 +248,6 @@ COORDINATE SCALING:
 Current system: Windows 10 with dynamic resolution detection"""
 
     def process_request(self, user_input: str, context: Optional[Dict] = None) -> AIResponse:
-        """
-        Process user request and generate appropriate commands
-
-        Args:
-            user_input: Natural language command from user
-            context: Optional context from previous commands
-
-        Returns:
-            AIResponse with generated commands
-        """
         if not self.client:
             return AIResponse(
                 success=False,
@@ -267,13 +257,10 @@ Current system: Windows 10 with dynamic resolution detection"""
             )
 
         try:
-            # Build the prompt
             prompt = self._build_prompt(user_input, context)
 
-            # Use faster model for text-only requests without context
             model_to_use = self.fast_model if not context else self.model
 
-            # Call OpenAI API
             response = self.client.chat.completions.create(
                 model=model_to_use,
                 messages=[
@@ -284,12 +271,9 @@ Current system: Windows 10 with dynamic resolution detection"""
                 temperature=self.temperature
             )
 
-            # Parse response
             ai_response_text = response.choices[0].message.content.strip()
 
-            # Try to extract JSON if there's extra text
             if not ai_response_text.startswith('{'):
-                # Look for JSON block
                 json_start = ai_response_text.find('{')
                 json_end = ai_response_text.rfind('}') + 1
                 if json_start >= 0 and json_end > json_start:
@@ -297,7 +281,6 @@ Current system: Windows 10 with dynamic resolution detection"""
 
             ai_data = json.loads(ai_response_text)
 
-            # Convert to AIResponse object
             return self._parse_ai_response(ai_data)
 
         except json.JSONDecodeError as e:
@@ -320,7 +303,6 @@ Current system: Windows 10 with dynamic resolution detection"""
             )
 
     def _build_prompt(self, user_input: str, context: Optional[Dict] = None) -> str:
-        """Build prompt for OpenAI API"""
         prompt = f"User Request: {user_input}\n\n"
 
         if context:
@@ -335,11 +317,9 @@ RESPOND ONLY WITH A VALID JSON OBJECT - NO OTHER TEXT. Follow the exact format s
         return prompt
 
     def _parse_ai_response(self, ai_data: Dict) -> AIResponse:
-        """Parse AI response into AIResponse object"""
         try:
             commands = []
             for cmd_data in ai_data.get('commands', []):
-                # Convert to existing ParsedCommand structure
                 command = ParsedCommand(
                     command_type=ParserCommandType(cmd_data['command_type'].lower()),
                     action=ParserActionType(cmd_data['action'].lower()),
@@ -368,7 +348,6 @@ RESPOND ONLY WITH A VALID JSON OBJECT - NO OTHER TEXT. Follow the exact format s
             )
 
     def generate_follow_up_suggestions(self, completed_commands: List[ParsedCommand]) -> List[str]:
-        """Generate follow-up command suggestions based on completed commands"""
         suggestions = []
 
         for cmd in completed_commands:
@@ -391,10 +370,9 @@ RESPOND ONLY WITH A VALID JSON OBJECT - NO OTHER TEXT. Follow the exact format s
                     "Close all programs"
                 ])
 
-        return list(set(suggestions))[:5]  # Return unique suggestions, max 5
+        return list(set(suggestions))[:5]
 
     def explain_command(self, command: ParsedCommand) -> str:
-        """Generate human-readable explanation of a command"""
         explanations = {
             ParserCommandType.MOUSE: f"Perform {command.action.value} mouse action",
             ParserCommandType.KEYBOARD: f"Perform {command.action.value} keyboard action",
@@ -413,12 +391,42 @@ RESPOND ONLY WITH A VALID JSON OBJECT - NO OTHER TEXT. Follow the exact format s
 
         return base_explanation
 
+    def chat_response(self, user_message: str) -> str:
+        if not self.client:
+            return "I'm sorry, I'm not currently available. Please check my configuration."
+
+        try:
+            chat_system_context = """You are AXELA, a friendly and helpful AI assistant.
+You are having a casual conversation with the user - they're not asking you to control their computer right now, just chatting.
+
+Be conversational, warm, and helpful. Answer questions, provide information, offer advice, or just be a friendly chat companion.
+Keep responses concise but informative. Feel free to use emojis occasionally to be more personable.
+
+You CAN control computers and execute commands when needed, but right now you're just chatting.
+If the user asks you to do something on their computer, politely let them know they should switch to command mode for that."""
+
+            response = self.client.chat.completions.create(
+                model=self.fast_model,  # Use fast model for chat
+                messages=[
+                    {"role": "system", "content": chat_system_context},
+                    {"role": "user", "content": user_message}
+                ],
+                max_tokens=300,
+                temperature=0.8
+            )
+
+            return response.choices[0].message.content.strip()
+
+        except Exception as e:
+            if self.logger:
+                self.logger.log_error(f"Chat response failed: {e}")
+            return f"I'm having trouble responding right now. Error: {str(e)}"
+
     def is_available(self) -> bool:
-        """Check if AI agent is available for use"""
+        """Check if AI aent is available for use"""
         return OPENAI_AVAILABLE and self.client is not None
 
     def get_status(self) -> Dict[str, Any]:
-        """Get current status of AI agent"""
         env_path = Path(__file__).parent.parent / '.env'
         return {
             "available": self.is_available(),
@@ -434,29 +442,16 @@ RESPOND ONLY WITH A VALID JSON OBJECT - NO OTHER TEXT. Follow the exact format s
         }
 
     def set_model(self, model: str):
-        """Set the OpenAI model to use"""
         self.model = model
         if self.logger:
             self.logger.log_info(f"AI model changed to: {model}")
 
     def set_temperature(self, temperature: float):
-        """Set the temperature for AI responses (0.0 to 1.0)"""
         self.temperature = max(0.0, min(1.0, temperature))
         if self.logger:
             self.logger.log_info(f"AI temperature set to: {self.temperature}")
 
     def process_with_visual_context(self, user_input: str, screenshot_path: Optional[str] = None, context: Optional[Dict] = None) -> AIResponse:
-        """
-        Process user request with visual context from screenshot using GPT-4o Vision
-
-        Args:
-            user_input: Natural language command
-            screenshot_path: Path to screenshot file for visual context
-            context: Optional context from previous commands
-
-        Returns:
-            AIResponse with generated commands
-        """
         if not self.client:
             return AIResponse(
                 success=False,
@@ -466,23 +461,18 @@ RESPOND ONLY WITH A VALID JSON OBJECT - NO OTHER TEXT. Follow the exact format s
             )
 
         try:
-            # Build the prompt
             prompt = self._build_prompt(user_input, context)
 
-            # Prepare messages
             messages = [{"role": "system", "content": self.system_context}]
 
             if screenshot_path and Path(screenshot_path).exists():
-                # Load and encode the screenshot
                 image_data = self._encode_image(screenshot_path)
                 if image_data:
                     if self.logger:
                         self.logger.log_info(f"Processing command with visual context from: {screenshot_path}")
 
-                    # Get screen resolution and image info
                     screen_info = self._get_screen_info(screenshot_path)
 
-                    # Add visual context to prompt with resolution info
                     visual_prompt = f"""{prompt}
 
 VISUAL CONTEXT: I can see the current screen screenshot.
@@ -512,13 +502,10 @@ Analyze the screenshot now to identify the EXACT TEXT of the element you need to
                         ]
                     })
                 else:
-                    # Fallback to text-only if image loading fails
                     messages.append({"role": "user", "content": prompt})
             else:
-                # No screenshot, use text-only
                 messages.append({"role": "user", "content": prompt})
 
-            # Call OpenAI API with vision support
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
@@ -526,10 +513,8 @@ Analyze the screenshot now to identify the EXACT TEXT of the element you need to
                 temperature=self.temperature
             )
 
-            # Parse response
             ai_response_text = response.choices[0].message.content.strip()
 
-            # Try to extract JSON if there's extra text
             if not ai_response_text.startswith('{'):
                 json_start = ai_response_text.find('{')
                 json_end = ai_response_text.rfind('}') + 1
@@ -538,7 +523,6 @@ Analyze the screenshot now to identify the EXACT TEXT of the element you need to
 
             ai_data = json.loads(ai_response_text)
 
-            # Convert to AIResponse object
             return self._parse_ai_response(ai_data)
 
         except json.JSONDecodeError as e:
@@ -561,15 +545,6 @@ Analyze the screenshot now to identify the EXACT TEXT of the element you need to
             )
 
     def _encode_image(self, image_path: str) -> Optional[str]:
-        """
-        Encode image to base64 for OpenAI Vision API
-
-        Args:
-            image_path: Path to image file
-
-        Returns:
-            Base64 encoded image string or None if failed
-        """
         try:
             with open(image_path, "rb") as image_file:
                 return base64.b64encode(image_file.read()).decode('utf-8')
@@ -579,25 +554,14 @@ Analyze the screenshot now to identify the EXACT TEXT of the element you need to
             return None
 
     def _get_screen_info(self, screenshot_path: str) -> Dict[str, Any]:
-        """
-        Get screen resolution and screenshot scaling information
-
-        Args:
-            screenshot_path: Path to screenshot file
-
-        Returns:
-            Dictionary with screen and image information
-        """
         try:
-            # Check if screenshot file exists
+
             if not Path(screenshot_path).exists():
                 raise FileNotFoundError(f"Screenshot file not found: {screenshot_path}")
 
-            # Get actual screen resolution
             import pyautogui
             screen_width, screen_height = pyautogui.size()
 
-            # Get screenshot dimensions
             image_width, image_height = screen_width, screen_height  # Default fallback
 
             try:
@@ -607,7 +571,6 @@ Analyze the screenshot now to identify the EXACT TEXT of the element you need to
                     if self.logger:
                         self.logger.log_info(f"Screenshot loaded: {image_width}x{image_height} pixels")
             except ImportError:
-                # Fallback without PIL
                 try:
                     import cv2
                     img = cv2.imread(screenshot_path)
@@ -619,11 +582,10 @@ Analyze the screenshot now to identify the EXACT TEXT of the element you need to
                     if self.logger:
                         self.logger.log_warning("Neither PIL nor CV2 available for image reading")
 
-            # Calculate scale factor
+
             scale_factor_x = screen_width / image_width if image_width > 0 else 1.0
             scale_factor_y = screen_height / image_height if image_height > 0 else 1.0
 
-            # Use the average scale factor or minimum to be safe
             scale_factor = min(scale_factor_x, scale_factor_y)
 
             return {
@@ -640,7 +602,7 @@ Analyze the screenshot now to identify the EXACT TEXT of the element you need to
             if self.logger:
                 self.logger.log_error(f"Failed to get screen info: {e}")
 
-            # Return default values
+
             return {
                 'screen_width': 1920,
                 'screen_height': 1080,
@@ -652,38 +614,20 @@ Analyze the screenshot now to identify the EXACT TEXT of the element you need to
             }
 
     def needs_visual_context(self, user_input: str) -> bool:
-        """
-        Determine if a command likely needs visual context IMMEDIATELY
 
-        This should only return True if we need to see the CURRENT screen state
-        before generating commands. For multi-step tasks like "search then click",
-        the AI will generate intermediate screenshots as needed.
-
-        Args:
-            user_input: Natural language command
-
-        Returns:
-            bool: True if visual context is needed immediately
-        """
         user_lower = user_input.lower()
 
-        # Only need immediate visual context if:
-        # 1. Command starts with visual actions (not search/navigation first)
-        # 2. Command refers to something already on screen
-
         immediate_visual_patterns = [
-            r'^(click|select|find|locate)\s+',  # Starts with visual action
+            r'^(click|select|find|locate)\s+',
             r'^(right\s+click|double\s+click)\s+',
-            r'(current|this|visible)\s+(window|screen|page)',  # Refers to current state
-            r'(what|where)\s+(is|are)\s+',  # Questions about current state
+            r'(current|this|visible)\s+(window|screen|page)',
+            r'(what|where)\s+(is|are)\s+',
         ]
 
-        # Don't need immediate visual context if command starts with navigation/search
         if any(user_lower.startswith(pattern) for pattern in [
             'search', 'open', 'navigate', 'go to', 'launch', 'start'
         ]):
             return False
 
-        # Check for immediate visual action patterns
         import re
         return any(re.search(pattern, user_lower) for pattern in immediate_visual_patterns)

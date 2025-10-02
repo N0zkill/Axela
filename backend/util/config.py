@@ -134,9 +134,12 @@ class Config:
                 'custom': self.custom_settings
             }
 
-            data['voice']['recognition_engine'] = self.voice.recognition_engine.value
-            data['voice']['tts_engine'] = self.voice.tts_engine.value
-            data['security']['level'] = self.security.level.value
+            if hasattr(self.voice.recognition_engine, 'value'):
+                data['voice']['recognition_engine'] = self.voice.recognition_engine.value
+            if hasattr(self.voice.tts_engine, 'value'):
+                data['voice']['tts_engine'] = self.voice.tts_engine.value
+            if hasattr(self.security.level, 'value'):
+                data['security']['level'] = self.security.level.value
 
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)

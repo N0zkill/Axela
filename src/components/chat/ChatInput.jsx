@@ -1,8 +1,7 @@
-
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Loader2 } from "lucide-react";
+import { Send, Loader2, Sparkles } from "lucide-react";
 import { motion } from "framer-motion";
 
 export default function ChatInput({ onSendMessage, isProcessing, disabled }) {
@@ -10,7 +9,7 @@ export default function ChatInput({ onSendMessage, isProcessing, disabled }) {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (message.trim() && !isProcessing) {
+    if (message.trim() && !isProcessing && !disabled) {
       onSendMessage(message.trim());
       setMessage("");
     }
@@ -25,34 +24,45 @@ export default function ChatInput({ onSendMessage, isProcessing, disabled }) {
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
+      initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="bg-card/80 backdrop-blur-md rounded-2xl p-4 border shadow-lg transition-colors duration-200">
+      className="relative">
 
-      <form onSubmit={handleSubmit} className="flex gap-3">
-        <Textarea
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          onKeyPress={handleKeyPress}
-          placeholder="Ask AXELA anything..."
-          disabled={disabled || isProcessing} 
-          className="bg-background text-foreground p-2 text-sm flex w-full border border-input ring-offset-background focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 flex-1 placeholder:text-muted-foreground resize-none min-h-[50px] max-h-[120px] transition-colors duration-200 rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-          rows={1} />
+      <form onSubmit={handleSubmit} className="flex items-end gap-3">
+        <div className="flex-1 relative">
+          <Textarea
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            onKeyPress={handleKeyPress}
+            placeholder={disabled ? "Connecting to backend..." : "Ask AXELA anything..."}
+            disabled={disabled || isProcessing}
+            className="bg-stone-800/50 text-stone-100 px-4 py-2 text-sm border border-stone-700/50 focus:border-orange-500/50 focus-visible:ring-2 focus-visible:ring-orange-500/20 disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-stone-800/30 flex-1 placeholder:text-stone-500 resize-none min-h-[38px] max-h-[160px] rounded-lg shadow-sm transition-all duration-200"
+            rows={1} />
+        </div>
 
-        
         <Button
           type="submit"
           size="lg"
           disabled={!message.trim() || isProcessing || disabled}
-          className="bg-primary hover:bg-primary/90 text-primary-foreground border-none shadow-lg shadow-primary/25 px-6 transition-all duration-200">
+          className="bg-orange-500 hover:bg-orange-600 text-white border-0 shadow-lg shadow-orange-500/20 h-[38px] px-5 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:shadow-none">
 
-          {isProcessing ?
-          <Loader2 className="w-5 h-5 animate-spin" /> :
-
-          <Send className="w-5 h-5" />
-          }
+          {isProcessing ? (
+            <Loader2 className="w-5 h-5 animate-spin" />
+          ) : (
+            <Send className="w-5 h-5" />
+          )}
         </Button>
       </form>
-    </motion.div>);
 
+      {disabled && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="absolute -top-12 left-0 right-0 flex items-center justify-center gap-2 text-sm text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-2">
+          <Sparkles className="w-4 h-4" />
+          <span className="font-medium">Backend is starting up...</span>
+        </motion.div>
+      )}
+    </motion.div>
+  );
 }

@@ -300,11 +300,35 @@ def main():
         version="Axela 1.0.0"
     )
 
+    parser.add_argument(
+        "--api-mode",
+        action="store_true",
+        help="Run as API server for Electron frontend"
+    )
+
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="API server host (when using --api-mode)"
+    )
+
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="API server port (when using --api-mode)"
+    )
+
     args = parser.parse_args()
 
     try:
-        app = AxelaApp(config_file=args.config)
-        app.run_cli()
+        if args.api_mode:
+            from api_server import AxelaAPIServer
+            server = AxelaAPIServer(config_file=args.config)
+            server.start_server(args.host, args.port)
+        else:
+            app = AxelaApp(config_file=args.config)
+            app.run_cli()
     except KeyboardInterrupt:
         print("\nShutdown requested")
     except Exception as e:

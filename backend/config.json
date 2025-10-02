@@ -1,18 +1,18 @@
 {
   "voice": {
-    "enabled": true,
+    "enabled": false,
     "recognition_engine": "windows_speech",
     "tts_engine": "windows_tts",
     "activation_phrase": "hey axela",
     "voice_threshold": 0.7,
-    "tts_rate": 200,
-    "tts_volume": 0.8,
+    "tts_rate": 50,
+    "tts_volume": 1,
     "language": "en-US",
     "microphone_device": null,
     "speaker_device": null
   },
   "security": {
-    "level": "safe_mode",
+    "level": "unrestricted",
     "require_confirmation": [
       "shutdown",
       "restart",
@@ -32,26 +32,9 @@
     "enable_logging": true,
     "log_sensitive_data": false
   },
-  "ui": {
-    "theme": "dark",
-    "show_notifications": true,
-    "show_command_history": true,
-    "auto_minimize": false,
-    "transparency": 1.0,
-    "window_position": [
-      100,
-      100
-    ],
-    "window_size": [
-      800,
-      600
-    ],
-    "font_size": 12,
-    "show_tooltips": true
-  },
   "performance": {
-    "mouse_speed": 1.0,
-    "keyboard_speed": 0.05,
+    "mouse_speed": 2,
+    "keyboard_speed": 0.01,
     "screenshot_quality": 95,
     "max_command_history": 1000,
     "auto_cleanup_days": 30,
@@ -67,5 +50,7 @@
     "repeat_last": "ctrl+alt+r",
     "command_history": "ctrl+alt+h"
   },
-  "custom": {}
+  "custom": {
+    "mode": "ai"
+  }
 }
