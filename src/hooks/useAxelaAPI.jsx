@@ -63,10 +63,13 @@ export const useAxelaAPI = () => {
     setError(null);
 
     try {
-      // Resolve command aliases before executing
-      const resolvedCommand = resolveCommand(command);
-      if (resolvedCommand !== command) {
-        console.log(`>>> Command alias resolved: "${command}" → "${resolvedCommand}"`);
+      let finalCommand = command;
+      if (mode === "manual") {
+        const resolvedCommand = resolveCommand(command);
+        if (resolvedCommand !== command) {
+          console.log(`>>> Command alias resolved: "${command}" → "${resolvedCommand}"`);
+          finalCommand = resolvedCommand;
+        }
       }
 
       let result;
@@ -75,11 +78,11 @@ export const useAxelaAPI = () => {
 
       if (isElectron) {
         // Use Electron IPC - pass both command and mode
-        result = await window.electronAPI.sendCommand(resolvedCommand, mode);
+        result = await window.electronAPI.sendCommand(finalCommand, mode);
       } else {
         // Use direct API call
         const payload = {
-          command: resolvedCommand,
+          command: finalCommand,
           mode  // "manual", "ai", or "chat"
         };
         console.log('>>> Payload:', payload);

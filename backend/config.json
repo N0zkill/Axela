@@ -3,10 +3,11 @@
     "enabled": false,
     "recognition_engine": "windows_speech",
     "tts_engine": "windows_tts",
+    "tts_voice": "0",
     "activation_phrase": "hey axela",
     "voice_threshold": 0.7,
-    "tts_rate": 50,
-    "tts_volume": 1,
+    "tts_rate": 200,
+    "tts_volume": 0.5,
     "language": "en-US",
     "microphone_device": null,
     "speaker_device": null
@@ -51,6 +52,7 @@
     "command_history": "ctrl+alt+h"
   },
   "custom": {
-    "mode": "ai"
+    "mode": "manual",
+    "auto_speak_responses": false
   }
 }
