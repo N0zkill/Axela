@@ -1,11 +1,18 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useImperativeHandle, forwardRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Send, Loader2, Sparkles } from "lucide-react";
 import { motion } from "framer-motion";
 
-export default function ChatInput({ onSendMessage, isProcessing, disabled }) {
+const ChatInput = forwardRef(({ onSendMessage, isProcessing, disabled }, ref) => {
   const [message, setMessage] = useState("");
+  const textareaRef = useRef(null);
+
+  useImperativeHandle(ref, () => ({
+    focus: () => {
+      textareaRef.current?.focus();
+    }
+  }));
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -31,6 +38,7 @@ export default function ChatInput({ onSendMessage, isProcessing, disabled }) {
       <form onSubmit={handleSubmit} className="flex items-end gap-3">
         <div className="flex-1 relative">
           <Textarea
+            ref={textareaRef}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             onKeyPress={handleKeyPress}
@@ -65,4 +73,8 @@ export default function ChatInput({ onSendMessage, isProcessing, disabled }) {
       )}
     </motion.div>
   );
-}
+});
+
+ChatInput.displayName = "ChatInput";
+
+export default ChatInput;

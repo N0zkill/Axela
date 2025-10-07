@@ -17,6 +17,7 @@ export default function AssistantPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [mode, setMode] = useState("ai"); // "manual", "ai", or "chat"
   const messagesEndRef = useRef(null);
+  const chatInputRef = useRef(null);
 
   const axelaAPI = useAxelaAPI();
 
@@ -185,6 +186,9 @@ export default function AssistantPage() {
       setConversations(prev => prev.map(c => c.id === conv.id ? finalConv : c));
     } finally {
       setIsProcessing(false);
+      setTimeout(() => {
+        chatInputRef.current?.focus();
+      }, 100);
     }
   };
 
@@ -371,6 +375,7 @@ export default function AssistantPage() {
             <div className="px-5 py-3.5 border-t pb-4 border-stone-800/50 bg-stone-900/50 backdrop-blur-xl">
               <div className="max-w-4xl mx-auto">
                 <ChatInput
+                  ref={chatInputRef}
                   onSendMessage={sendMessage}
                   isProcessing={isProcessing}
                   disabled={!axelaAPI.status.connected}
