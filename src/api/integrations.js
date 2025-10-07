@@ -1,33 +1,54 @@
-import { useAxelaAPI } from '../hooks/useAxelaAPI';
+import { resolveCommand } from './commandAliases';
 
-export const InvokeLLM = async (messages, options = {}) => {
 
+export const ExecuteCommand = async (axelaAPI, command, options = {}) => {
   try {
-    const lastMessage = messages[messages.length - 1];
+    const resolvedCommand = resolveCommand(command);
+    console.log(`Command resolved: "${command}" -> "${resolvedCommand}"`);
 
-    if (!lastMessage || lastMessage.role !== 'user') {
-      throw new Error('No user message to process');
+    const mode = options.mode || (options.aiMode !== false ? "ai" : "manual");
+    return await axelaAPI.executeCommand(resolvedCommand, mode);
+  } catch (error) {
+    console.error('Command execution error:', error);
+    throw error;
+  }
+};
+
+export const InvokeLLM = async (axelaAPI, messagesOrPrompt, options = {}) => {
+  try {
+    let command;
+
+    if (Array.isArray(messagesOrPrompt)) {
+      const lastMessage = messagesOrPrompt[messagesOrPrompt.length - 1];
+      if (!lastMessage || (lastMessage.role !== 'user' && lastMessage.sender !== 'user')) {
+        throw new Error('No user message to process');
+      }
+      command = lastMessage.content;
+    } else if (typeof messagesOrPrompt === 'object' && messagesOrPrompt.prompt) {
+      command = messagesOrPrompt.prompt;
+    } else {
+      command = messagesOrPrompt;
     }
 
-    const axelaAPI = useAxelaAPI();
-    const result = await axelaAPI.executeCommand(lastMessage.content, true);
+    const resolvedCommand = resolveCommand(command);
+    const result = await axelaAPI.executeCommand(resolvedCommand, "chat");
 
     return {
       success: result.success,
       message: {
         id: Date.now().toString(),
         role: 'assistant',
-        content: result.message,
+        sender: 'assistant',
+        content: result.message || result.response || '',
         timestamp: new Date().toISOString(),
         data: result.data
       },
       usage: {
-        prompt_tokens: lastMessage.content.length,
-        completion_tokens: result.message.length,
-        total_tokens: lastMessage.content.length + result.message.length
+        prompt_tokens: command.length,
+        completion_tokens: (result.message || result.response || '').length,
+        total_tokens: command.length + (result.message || result.response || '').length
       }
     };
-
   } catch (error) {
     console.error('LLM invocation error:', error);
     return {
@@ -35,6 +56,7 @@ export const InvokeLLM = async (messages, options = {}) => {
       message: {
         id: Date.now().toString(),
         role: 'assistant',
+        sender: 'assistant',
         content: `I encountered an error: ${error.message}`,
         timestamp: new Date().toISOString(),
         error: true
@@ -43,19 +65,8 @@ export const InvokeLLM = async (messages, options = {}) => {
   }
 };
 
-export const ExecuteCommand = async (command, options = {}) => {
+export const GetSystemStatus = async (axelaAPI) => {
   try {
-    const axelaAPI = useAxelaAPI();
-    return await axelaAPI.executeCommand(command, options.aiMode !== false);
-  } catch (error) {
-    console.error('Command execution error:', error);
-    throw error;
-  }
-};
-
-export const GetSystemStatus = async () => {
-  try {
-    const axelaAPI = useAxelaAPI();
     return await axelaAPI.getStatus();
   } catch (error) {
     console.error('Status check error:', error);
@@ -63,9 +74,8 @@ export const GetSystemStatus = async () => {
   }
 };
 
-export const TakeScreenshot = async () => {
+export const TakeScreenshot = async (axelaAPI) => {
   try {
-    const axelaAPI = useAxelaAPI();
     return await axelaAPI.takeScreenshot();
   } catch (error) {
     console.error('Screenshot error:', error);
@@ -110,9 +120,8 @@ export const AppControls = {
 };
 
 export const ConfigManager = {
-  get: async () => {
+  get: async (axelaAPI) => {
     try {
-      const axelaAPI = useAxelaAPI();
       return await axelaAPI.getConfig();
     } catch (error) {
       console.error('Config get error:', error);
@@ -120,9 +129,8 @@ export const ConfigManager = {
     }
   },
 
-  update: async (configUpdate) => {
+  update: async (axelaAPI, configUpdate) => {
     try {
-      const axelaAPI = useAxelaAPI();
       return await axelaAPI.updateConfig(configUpdate);
     } catch (error) {
       console.error('Config update error:', error);

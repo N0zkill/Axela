@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { resolveCommand } from '../api/commandAliases';
 
 const API_BASE_URL = 'http://127.0.0.1:8000';
 
@@ -62,17 +63,23 @@ export const useAxelaAPI = () => {
     setError(null);
 
     try {
+      // Resolve command aliases before executing
+      const resolvedCommand = resolveCommand(command);
+      if (resolvedCommand !== command) {
+        console.log(`>>> Command alias resolved: "${command}" → "${resolvedCommand}"`);
+      }
+
       let result;
 
       console.log(`>>> Executing command with mode: "${mode}"`);
 
       if (isElectron) {
         // Use Electron IPC - pass both command and mode
-        result = await window.electronAPI.sendCommand(command, mode);
+        result = await window.electronAPI.sendCommand(resolvedCommand, mode);
       } else {
         // Use direct API call
         const payload = {
-          command,
+          command: resolvedCommand,
           mode  // "manual", "ai", or "chat"
         };
         console.log('>>> Payload:', payload);
