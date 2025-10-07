@@ -15,9 +15,7 @@ class VoiceEngine(Enum):
 
 class TTSEngine(Enum):
     WINDOWS_TTS = "windows_tts"
-    GOOGLE_TTS = "google_tts"
-    AZURE_TTS = "azure_tts"
-    PYTTSX3 = "pyttsx3"
+    OPENAI_TTS = "openai_tts"
 
 
 class SecurityLevel(Enum):
@@ -32,6 +30,7 @@ class VoiceSettings:
     enabled: bool = True
     recognition_engine: VoiceEngine = VoiceEngine.WINDOWS_SPEECH
     tts_engine: TTSEngine = TTSEngine.WINDOWS_TTS
+    tts_voice: Optional[str] = None  # Voice ID/name for the TTS engine
     activation_phrase: str = "hey axela"
     voice_threshold: float = 0.7
     tts_rate: int = 200
@@ -108,9 +107,21 @@ class Config:
                     data = json.load(f)
 
                 if 'voice' in data:
-                    self.voice = VoiceSettings(**data['voice'])
+                    voice_data = data['voice'].copy()
+                    # Convert string enum values to enums
+                    if 'recognition_engine' in voice_data and isinstance(voice_data['recognition_engine'], str):
+                        voice_data['recognition_engine'] = VoiceEngine(voice_data['recognition_engine'])
+                    if 'tts_engine' in voice_data and isinstance(voice_data['tts_engine'], str):
+                        voice_data['tts_engine'] = TTSEngine(voice_data['tts_engine'])
+                    self.voice = VoiceSettings(**voice_data)
+                    
                 if 'security' in data:
-                    self.security = SecuritySettings(**data['security'])
+                    security_data = data['security'].copy()
+                    # Convert string enum values to enums
+                    if 'level' in security_data and isinstance(security_data['level'], str):
+                        security_data['level'] = SecurityLevel(security_data['level'])
+                    self.security = SecuritySettings(**security_data)
+                    
                 if 'performance' in data:
                     self.performance = PerformanceSettings(**data['performance'])
                 if 'hotkeys' in data:
@@ -121,6 +132,8 @@ class Config:
                 return True
         except Exception as e:
             print(f"Error loading config: {e}")
+            import traceback
+            traceback.print_exc()
 
         return False
 
@@ -235,6 +248,7 @@ class Config:
         return {
             'engine': self.voice.recognition_engine.value,
             'tts_engine': self.voice.tts_engine.value,
+            'tts_voice': self.voice.tts_voice,
             'activation_phrase': self.voice.activation_phrase,
             'threshold': self.voice.voice_threshold,
             'language': self.voice.language,
@@ -289,9 +303,20 @@ class Config:
                 self.reset_to_defaults()
 
             if 'voice' in data:
-                self.voice = VoiceSettings(**data['voice'])
+                voice_data = data['voice'].copy()
+                # Convert string enum values to enums
+                if 'recognition_engine' in voice_data and isinstance(voice_data['recognition_engine'], str):
+                    voice_data['recognition_engine'] = VoiceEngine(voice_data['recognition_engine'])
+                if 'tts_engine' in voice_data and isinstance(voice_data['tts_engine'], str):
+                    voice_data['tts_engine'] = TTSEngine(voice_data['tts_engine'])
+                self.voice = VoiceSettings(**voice_data)
+                
             if 'security' in data:
-                self.security = SecuritySettings(**data['security'])
+                security_data = data['security'].copy()
+                if 'level' in security_data and isinstance(security_data['level'], str):
+                    security_data['level'] = SecurityLevel(security_data['level'])
+                self.security = SecuritySettings(**security_data)
+                
             if 'performance' in data:
                 self.performance = PerformanceSettings(**data['performance'])
             if 'hotkeys' in data:

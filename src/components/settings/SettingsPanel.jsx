@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -10,8 +10,11 @@ import { motion } from "framer-motion";
 
 export default function SettingsPanel({ axelaAPI }) {
   const [config, setConfig] = useState(null);
+  const [originalConfig, setOriginalConfig] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [availableVoices, setAvailableVoices] = useState([]);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -19,6 +22,10 @@ export default function SettingsPanel({ axelaAPI }) {
       if (response.ok) {
         const data = await response.json();
         setConfig(data.config);
+        setOriginalConfig(JSON.parse(JSON.stringify(data.config))); // Deep copy
+        setHasUnsavedChanges(false);
+        // Load available voices for current engine
+        loadVoices();
       }
     } catch (error) {
       console.error("Error loading config:", error);
@@ -27,29 +34,71 @@ export default function SettingsPanel({ axelaAPI }) {
     }
   }, []);
 
+  const loadVoices = async () => {
+    try {
+      const response = await fetch('http://127.0.0.1:8000/tts/voices');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.voices) {
+          setAvailableVoices(data.voices);
+        }
+      }
+    } catch (error) {
+      console.error("Error loading voices:", error);
+    }
+  };
+
   useEffect(() => {
     loadConfig();
   }, [loadConfig]);
 
-  const updateSetting = async (section, settings) => {
+  // Update local config state (doesn't save to backend yet)
+  const updateLocalSetting = (section, settings) => {
+    setConfig(prev => ({
+      ...prev,
+      [section]: { ...prev[section], ...settings }
+    }));
+    setHasUnsavedChanges(true);
+  };
+
+  // Save all pending changes to backend
+  const saveAllChanges = async () => {
+    setSaving(true);
     try {
-      const response = await fetch('http://127.0.0.1:8000/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ section, settings })
-      });
-
-      if (response.ok) {
-        // Reload config to get the updated state
-        await loadConfig();
-
-        // Notify other components that config has changed
-        window.dispatchEvent(new CustomEvent('axela-config-changed', {
-          detail: { section, settings }
-        }));
+      // Save each section that has changes
+      const sections = ['mode', 'voice', 'security', 'performance', 'hotkeys', 'custom'];
+      
+      for (const section of sections) {
+        if (section === 'mode') {
+          // Handle mode separately as it's in custom settings
+          if (config.mode !== originalConfig.mode) {
+            await fetch('http://127.0.0.1:8000/config', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ section: 'app', settings: { mode: config.mode } })
+            });
+          }
+        } else if (JSON.stringify(config[section]) !== JSON.stringify(originalConfig[section])) {
+          await fetch('http://127.0.0.1:8000/config', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ section, settings: config[section] })
+          });
+        }
       }
+
+      // Reload config to ensure sync
+      await loadConfig();
+
+      // Notify other components
+      window.dispatchEvent(new CustomEvent('axela-config-changed', {
+        detail: { section: 'all', settings: config }
+      }));
+      
     } catch (error) {
-      console.error(`Error updating ${section}:`, error);
+      console.error('Error saving settings:', error);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -116,7 +165,10 @@ export default function SettingsPanel({ axelaAPI }) {
                     ? "bg-orange-500/10 border-orange-500/50"
                     : "bg-stone-800/30 border-stone-700/30 hover:border-stone-600/50"
                 }`}
-                onClick={() => updateSetting("app", { mode: "manual" })}
+                onClick={() => {
+                  setConfig(prev => ({ ...prev, mode: "manual" }));
+                  setHasUnsavedChanges(true);
+                }}
               >
                 <div className="mt-0.5">
                   <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
@@ -139,7 +191,10 @@ export default function SettingsPanel({ axelaAPI }) {
                     ? "bg-orange-500/10 border-orange-500/50"
                     : "bg-stone-800/30 border-stone-700/30 hover:border-stone-600/50"
                 }`}
-                onClick={() => updateSetting("app", { mode: "ai" })}
+                onClick={() => {
+                  setConfig(prev => ({ ...prev, mode: "ai" }));
+                  setHasUnsavedChanges(true);
+                }}
               >
                 <div className="mt-0.5">
                   <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
@@ -162,7 +217,10 @@ export default function SettingsPanel({ axelaAPI }) {
                     ? "bg-orange-500/10 border-orange-500/50"
                     : "bg-stone-800/30 border-stone-700/30 hover:border-stone-600/50"
                 }`}
-                onClick={() => updateSetting("app", { mode: "chat" })}
+                onClick={() => {
+                  setConfig(prev => ({ ...prev, mode: "chat" }));
+                  setHasUnsavedChanges(true);
+                }}
               >
                 <div className="mt-0.5">
                   <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
@@ -199,7 +257,7 @@ export default function SettingsPanel({ axelaAPI }) {
                 <Label className="text-stone-200">Security Level</Label>
                 <Select
                   value={config.security?.level || "moderate"}
-                  onValueChange={(value) => updateSetting("security", { level: value })}
+                  onValueChange={(value) => updateLocalSetting("security", { level: value })}
                 >
                   <SelectTrigger className="bg-stone-800/50 border-stone-700/50 text-stone-100">
                     <SelectValue />
@@ -225,7 +283,7 @@ export default function SettingsPanel({ axelaAPI }) {
                 </div>
                 <Switch
                   checked={config.security?.enable_logging !== false}
-                  onCheckedChange={(checked) => updateSetting("security", { enable_logging: checked })}
+                  onCheckedChange={(checked) => updateLocalSetting("security", { enable_logging: checked })}
                 />
               </div>
             </CardContent>
@@ -246,17 +304,86 @@ export default function SettingsPanel({ axelaAPI }) {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
-                <Label className="text-stone-200">Enable Voice Input</Label>
+                <div className="space-y-0.5">
+                  <Label className="text-stone-200">Enable Voice Input</Label>
+                  <p className="text-xs text-stone-500">Enable voice recognition</p>
+                </div>
                 <Switch
                   checked={config.voice?.enabled !== false}
-                  onCheckedChange={(checked) => updateSetting("voice", { enabled: checked })}
+                  onCheckedChange={(checked) => updateLocalSetting("voice", { enabled: checked })}
                 />
               </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-stone-200">Auto-Speak Responses</Label>
+                  <p className="text-xs text-stone-500">Automatically speak assistant replies</p>
+                </div>
+                <Switch
+                  checked={config.custom?.auto_speak_responses === true}
+                  onCheckedChange={(checked) => updateLocalSetting("custom", { auto_speak_responses: checked })}
+                />
+              </div>
+              <div>
+                <Label className="text-stone-200">TTS Engine</Label>
+                <Select
+                  value={config.voice?.tts_engine || "windows_tts"}
+                  onValueChange={async (value) => {
+                    updateLocalSetting("voice", { tts_engine: value });
+                    // Save just the TTS engine change immediately so we can load new voices
+                    try {
+                      await fetch('http://127.0.0.1:8000/config', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ section: 'voice', settings: { tts_engine: value } })
+                      });
+                      // Reload voices for the new engine
+                      setTimeout(() => loadVoices(), 500);
+                    } catch (error) {
+                      console.error("Error updating TTS engine:", error);
+                    }
+                  }}
+                >
+                  <SelectTrigger className="bg-stone-800/50 border-stone-700/50 text-stone-100 mt-2">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-stone-800 border-stone-700">
+                    <SelectItem value="windows_tts">Windows TTS</SelectItem>
+                    <SelectItem value="openai_tts">OpenAI TTS (Realistic AI Voices)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-stone-500 mt-1">
+                  {config.voice?.tts_engine === "windows_tts" && "Windows native TTS (David voice)"}
+                  {config.voice?.tts_engine === "openai_tts" && "Realistic AI voices powered by OpenAI"}
+                </p>
+              </div>
+              {availableVoices.length > 0 && (
+                <div>
+                  <Label className="text-stone-200">Voice</Label>
+                  <Select
+                    value={config.voice?.tts_voice || availableVoices[0]?.id}
+                    onValueChange={(value) => updateLocalSetting("voice", { tts_voice: value })}
+                  >
+                    <SelectTrigger className="bg-stone-800/50 border-stone-700/50 text-stone-100 mt-2">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-stone-800 border-stone-700">
+                      {availableVoices.map((voice) => (
+                        <SelectItem key={voice.id} value={voice.id}>
+                          {voice.name}{voice.description ? ` - ${voice.description}` : ''}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-stone-500 mt-1">
+                    Select a voice for the TTS engine
+                  </p>
+                </div>
+              )}
               <div>
                 <Label className="text-stone-200">TTS Volume</Label>
                 <Slider
                   value={[config.voice?.tts_volume * 100 || 80]}
-                  onValueChange={([value]) => updateSetting("voice", { tts_volume: value / 100 })}
+                  onValueChange={([value]) => updateLocalSetting("voice", { tts_volume: value / 100 })}
                   max={100}
                   step={1}
                   className="mt-2"
@@ -269,7 +396,7 @@ export default function SettingsPanel({ axelaAPI }) {
                 <Label className="text-stone-200">TTS Speed</Label>
                 <Slider
                   value={[config.voice?.tts_rate || 200]}
-                  onValueChange={([value]) => updateSetting("voice", { tts_rate: value })}
+                  onValueChange={([value]) => updateLocalSetting("voice", { tts_rate: value })}
                   min={50}
                   max={500}
                   step={10}
@@ -300,7 +427,7 @@ export default function SettingsPanel({ axelaAPI }) {
                 <Label className="text-stone-200">Mouse Speed</Label>
                 <Slider
                   value={[config.performance?.mouse_speed || 1.0]}
-                  onValueChange={([value]) => updateSetting("performance", { mouse_speed: value })}
+                  onValueChange={([value]) => updateLocalSetting("performance", { mouse_speed: value })}
                   min={0.5}
                   max={2.0}
                   step={0.1}
@@ -314,7 +441,7 @@ export default function SettingsPanel({ axelaAPI }) {
                 <Label className="text-stone-200">Keyboard Speed</Label>
                 <Slider
                   value={[(config.performance?.keyboard_speed || 0.05) * 1000]}
-                  onValueChange={([value]) => updateSetting("performance", { keyboard_speed: value / 1000 })}
+                  onValueChange={([value]) => updateLocalSetting("performance", { keyboard_speed: value / 1000 })}
                   min={10}
                   max={200}
                   step={5}
@@ -331,7 +458,7 @@ export default function SettingsPanel({ axelaAPI }) {
                 </div>
                 <Switch
                   checked={config.performance?.enable_caching !== false}
-                  onCheckedChange={(checked) => updateSetting("performance", { enable_caching: checked })}
+                  onCheckedChange={(checked) => updateLocalSetting("performance", { enable_caching: checked })}
                 />
               </div>
             </CardContent>
@@ -347,13 +474,25 @@ export default function SettingsPanel({ axelaAPI }) {
         className="flex gap-3 justify-center pt-4"
       >
         <Button
+          onClick={saveAllChanges}
+          disabled={saving || !hasUnsavedChanges}
+          className={`${
+            hasUnsavedChanges 
+              ? 'bg-orange-500 hover:bg-orange-600' 
+              : 'bg-stone-700'
+          } text-white shadow-lg ${hasUnsavedChanges ? 'shadow-orange-500/20' : ''} border-0 px-8 h-11`}
+        >
+          <Save className="w-4 h-4 mr-2" />
+          {saving ? "Saving..." : hasUnsavedChanges ? "Save Changes" : "No Changes"}
+        </Button>
+        <Button
           onClick={handleRestoreDefaults}
           disabled={saving}
           variant="outline"
-          className="border-orange-700 hover:bg-orange-900/30 text-orange-400"
+          className="border-stone-700 hover:bg-stone-800 text-stone-300 px-6 h-11"
         >
           <RefreshCw className="w-4 h-4 mr-2" />
-          {saving ? "Restoring..." : "Restore Default Settings"}
+          Restore Defaults
         </Button>
       </motion.div>
     </div>

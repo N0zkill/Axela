@@ -1,11 +1,12 @@
 import React from "react";
-import { Bot, User, Copy, Check, AlertCircle } from "lucide-react";
+import { Bot, User, Copy, Check, AlertCircle, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { motion } from "framer-motion";
 import { format } from "date-fns";
 
 export default function ChatMessage({ message }) {
   const [copied, setCopied] = React.useState(false);
+  const [isSpeaking, setIsSpeaking] = React.useState(false);
   const isUser = message.role === "user" || message.sender === "user";
   const isError = message.success === false;
 
@@ -13,6 +14,54 @@ export default function ChatMessage({ message }) {
     navigator.clipboard.writeText(message.content);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const speakMessage = async () => {
+    if (isSpeaking) {
+      // Stop speaking
+      try {
+        await fetch('http://127.0.0.1:8000/speak/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        setIsSpeaking(false);
+      } catch (error) {
+        console.error("Error stopping speech:", error);
+      }
+    } else {
+      // Start speaking
+      try {
+        setIsSpeaking(true);
+        console.log("Sending TTS request for:", message.content.substring(0, 50));
+        
+        const response = await fetch('http://127.0.0.1:8000/speak', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: message.content, blocking: false })
+        });
+        
+        const result = await response.json();
+        console.log("TTS API response:", result);
+        
+        if (!result.success) {
+          console.error("TTS failed:", result.message);
+          alert(`TTS Error: ${result.message}`);
+          setIsSpeaking(false);
+        } else {
+          console.log("TTS started successfully");
+          // Auto-stop after a delay (estimate based on text length)
+          const estimatedDuration = (message.content.split(' ').length / 3) * 1000; // ~180 words/min
+          setTimeout(() => {
+            console.log("TTS timeout completed");
+            setIsSpeaking(false);
+          }, estimatedDuration);
+        }
+      } catch (error) {
+        console.error("Error speaking message:", error);
+        alert(`TTS Error: ${error.message}`);
+        setIsSpeaking(false);
+      }
+    }
   };
 
   return (
@@ -59,18 +108,35 @@ export default function ChatMessage({ message }) {
                 {format(new Date(message.timestamp), 'h:mm a')}
               </span>
 
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 hover:bg-stone-700/50 rounded-lg"
-                onClick={copyToClipboard}
-              >
-                {copied ? (
-                  <Check className="w-3 h-3 text-orange-400" />
-                ) : (
-                  <Copy className="w-3 h-3 text-stone-400" />
-                )}
-              </Button>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={`h-6 w-6 hover:bg-stone-700/50 rounded-lg ${isSpeaking ? 'bg-orange-500/20' : ''}`}
+                  onClick={speakMessage}
+                  title={isSpeaking ? "Stop speaking" : "Speak message"}
+                >
+                  {isSpeaking ? (
+                    <VolumeX className="w-3 h-3 text-orange-400" />
+                  ) : (
+                    <Volume2 className="w-3 h-3 text-stone-400" />
+                  )}
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 hover:bg-stone-700/50 rounded-lg"
+                  onClick={copyToClipboard}
+                  title="Copy to clipboard"
+                >
+                  {copied ? (
+                    <Check className="w-3 h-3 text-orange-400" />
+                  ) : (
+                    <Copy className="w-3 h-3 text-stone-400" />
+                  )}
+                </Button>
+              </div>
             </div>
           )}
         </div>

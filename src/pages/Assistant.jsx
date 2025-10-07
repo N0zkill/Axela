@@ -16,6 +16,7 @@ export default function AssistantPage() {
   const [currentConversation, setCurrentConversation] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [mode, setMode] = useState("ai"); // "manual", "ai", or "chat"
+  const [autoSpeak, setAutoSpeak] = useState(false);
   const messagesEndRef = useRef(null);
   const chatInputRef = useRef(null);
 
@@ -30,6 +31,10 @@ export default function AssistantPage() {
       const newMode = response?.config?.mode || "ai";
       console.log('>>> Setting mode to:', newMode);
       setMode(newMode);
+      
+      // Load auto-speak setting
+      const autoSpeakEnabled = response?.config?.custom?.auto_speak_responses === true;
+      setAutoSpeak(autoSpeakEnabled);
     } catch (error) {
       console.error("Error loading mode:", error);
       setMode("ai"); // Fallback to AI mode on error
@@ -45,6 +50,8 @@ export default function AssistantPage() {
     const handleConfigChange = (event) => {
       if (event.detail.section === 'app' && event.detail.settings.mode) {
         loadMode();
+      } else if (event.detail.section === 'custom' && 'auto_speak_responses' in event.detail.settings) {
+        setAutoSpeak(event.detail.settings.auto_speak_responses);
       }
     };
 
@@ -167,6 +174,19 @@ export default function AssistantPage() {
 
       setCurrentConversation(finalConv);
       setConversations(prev => prev.map(c => c.id === conv.id ? finalConv : c));
+
+      // Auto-speak if enabled and message was successful
+      if (autoSpeak && result.success && assistantMessage.content) {
+        try {
+          await fetch('http://127.0.0.1:8000/speak', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: assistantMessage.content, blocking: false })
+          });
+        } catch (speakError) {
+          console.error("Error auto-speaking response:", speakError);
+        }
+      }
 
     } catch (error) {
       console.error("Error sending message:", error);

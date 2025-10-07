@@ -17,6 +17,7 @@ try:
     from core.executor import CommandExecutor
     from core.logger import AxelaLogger
     from core.ai_agent import AIAgent
+    from core.tts_service import get_tts_service, reinitialize_tts
     from util.config import Config
     from util.helpers import get_system_info
 except ImportError as e:
@@ -70,8 +71,28 @@ class AxelaAPIServer:
         self.commands_executed = 0
         self.successful_commands = 0
 
+        # Initialize TTS service
+        self.tts_service = None
+        self._initialize_tts()
+
         self._initialize()
         self.app = self._create_app()
+
+    def _initialize_tts(self):
+        """Initialize the TTS service with current config."""
+        try:
+            voice_config = self.config.get_voice_config()
+            # Use reinitialize to create a fresh instance with new config
+            self.tts_service = reinitialize_tts(voice_config)
+            if self.tts_service.is_available():
+                self.logger.log_info(f"TTS Service initialized with engine: {voice_config.get('tts_engine', 'pyttsx3')}")
+            else:
+                self.logger.log_warning("TTS Service could not be initialized")
+        except Exception as e:
+            self.logger.log_error(f"Failed to initialize TTS service: {e}")
+            import traceback
+            traceback.print_exc()
+            self.tts_service = None
 
     def _initialize(self):
         self.logger.log_info("Initializing Axela API Server")
@@ -220,9 +241,33 @@ class AxelaAPIServer:
                             raise ValueError(f"Invalid mode: {settings['mode']}. Must be 'manual', 'ai', or 'chat'")
 
                 elif section == "voice":
+                    from util.config import VoiceEngine, TTSEngine
                     for key, value in settings.items():
                         if hasattr(self.config.voice, key):
+                            # Convert string enum values to enums
+                            if key == "recognition_engine" and isinstance(value, str):
+                                value = VoiceEngine(value)
+                            elif key == "tts_engine" and isinstance(value, str):
+                                value = TTSEngine(value)
                             setattr(self.config.voice, key, value)
+                    
+                    # Handle voice change without full reinitialization
+                    if 'tts_voice' in settings and self.tts_service:
+                        try:
+                            self.tts_service.set_voice(settings['tts_voice'])
+                            # Also update the internal voice_name attribute
+                            self.tts_service.voice_name = settings['tts_voice']
+                            self.logger.log_info(f"TTS voice changed to: {settings['tts_voice']}")
+                        except Exception as e:
+                            self.logger.log_error(f"Failed to set TTS voice: {e}")
+                    
+                    # Reinitialize TTS if settings changed (excluding voice which is handled above)
+                    if any(key in settings for key in ['tts_engine', 'tts_rate', 'tts_volume', 'language']):
+                        try:
+                            self._initialize_tts()
+                            self.logger.log_info("TTS service reinitialized with new settings")
+                        except Exception as e:
+                            self.logger.log_error(f"Failed to reinitialize TTS: {e}")
 
                 elif section == "security":
                     from util.config import SecurityLevel
@@ -294,6 +339,92 @@ class AxelaAPIServer:
                     }
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/speak")
+        async def speak_text(request: Dict[str, Any]):
+            """Speak text using TTS service."""
+            try:
+                text = request.get("text", "")
+                if not text:
+                    return {"success": False, "message": "No text provided"}
+
+                if not self.tts_service:
+                    return {"success": False, "message": "TTS service not initialized"}
+                
+                if not self.tts_service.is_available():
+                    engine_info = self.tts_service.get_engine_info()
+                    return {
+                        "success": False, 
+                        "message": f"TTS engine not available. Engine: {engine_info.get('engine', 'unknown')}"
+                    }
+
+                blocking = request.get("blocking", False)
+                print(f"TTS API: Speaking text (blocking={blocking}): '{text[:100]}'")
+                success = self.tts_service.speak(text, blocking=blocking)
+
+                if success:
+                    return {"success": True, "message": "Speech initiated"}
+                else:
+                    return {"success": False, "message": "TTS speak() returned False - check backend logs"}
+
+            except Exception as e:
+                self.logger.log_error(f"Error in TTS: {e}")
+                import traceback
+                traceback.print_exc()
+                return {"success": False, "message": f"Exception: {str(e)}"}
+
+        @app.post("/speak/stop")
+        async def stop_speech():
+            """Stop current speech."""
+            try:
+                if self.tts_service:
+                    self.tts_service.stop()
+                    return {"success": True, "message": "Speech stopped"}
+                return {"success": False, "message": "TTS service not available"}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/tts/info")
+        async def get_tts_info():
+            """Get information about TTS service."""
+            try:
+                if self.tts_service:
+                    info = self.tts_service.get_engine_info()
+                    voices = self.tts_service.get_available_voices()
+                    return {
+                        "success": True,
+                        "info": info,
+                        "voices": voices[:10] if voices else []  # Limit to 10 voices for response size
+                    }
+                return {
+                    "success": False,
+                    "message": "TTS service not available"
+                }
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/tts/voices")
+        async def get_tts_voices():
+            """Get available voices for current TTS engine."""
+            try:
+                if self.tts_service and self.tts_service.is_available():
+                    voices = self.tts_service.get_available_voices()
+                    return {
+                        "success": True,
+                        "voices": voices
+                    }
+                return {
+                    "success": False,
+                    "message": "TTS service not available",
+                    "voices": []
+                }
+            except Exception as e:
+                self.logger.log_error(f"Error getting TTS voices: {e}")
+                return {
+                    "success": False,
+                    "message": str(e),
+                    "voices": []
+                }
 
         return app
 
