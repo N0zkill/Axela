@@ -79,8 +79,8 @@ class PerformanceSettings:
 class HotkeySettings:
     toggle_voice: str = "ctrl+alt+v"
     emergency_stop: str = "ctrl+alt+x"
+    minimize_to_tray: str = "ctrl+alt+m"
     screenshot: str = "ctrl+alt+s"
-    show_hide: str = "ctrl+alt+a"
     repeat_last: str = "ctrl+alt+r"
     command_history: str = "ctrl+alt+h"
 

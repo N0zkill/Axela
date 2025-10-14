@@ -27,7 +27,7 @@ export default function AssistantPage() {
       const response = await axelaAPI.getConfig();
       console.log('>>> Config response:', response);
       console.log('>>> Mode from config:', response?.config?.mode);
-      // API returns { config: { mode: ... } }
+      
       const newMode = response?.config?.mode || "ai";
       console.log('>>> Setting mode to:', newMode);
       setMode(newMode);
@@ -37,16 +37,20 @@ export default function AssistantPage() {
       setAutoSpeak(autoSpeakEnabled);
     } catch (error) {
       console.error("Error loading mode:", error);
-      setMode("ai"); // Fallback to AI mode on error
+      setMode("ai"); 
     }
   }, [axelaAPI]);
 
+  // Separate useEffect for initial setup
   useEffect(() => {
     if (conversations.length === 0) {
       createNewConversation();
     }
     loadMode();
+  }, []);
 
+  // Separate useEffect for config changes (no hotkey listener here)
+  useEffect(() => {
     const handleConfigChange = (event) => {
       if (event.detail.section === 'app' && event.detail.settings.mode) {
         loadMode();
@@ -56,11 +60,91 @@ export default function AssistantPage() {
     };
 
     window.addEventListener('axela-config-changed', handleConfigChange);
-
+    
     return () => {
       window.removeEventListener('axela-config-changed', handleConfigChange);
     };
   }, [loadMode]);
+
+  // Separate useEffect for hotkeys - only run once on mount
+  useEffect(() => {
+    const handleHotkey = async (hotkey) => {
+      if (hotkey === 'emergency_stop') {
+        // Show emergency stop notification
+        console.log('Emergency stop activated!');
+        
+        // Use setConversations callback to get latest state
+        setConversations(prev => {
+          const current = prev.find(c => c.id === currentConversation?.id);
+          if (current) {
+            const emergencyMessage = {
+              id: Date.now().toString(),
+              content: '⚠️ Emergency stop activated - Backend process terminated. The backend will restart automatically in 3 seconds...',
+              role: 'assistant',
+              timestamp: new Date().toISOString(),
+              success: false
+            };
+            
+            const updatedMessages = [...(current.messages || []), emergencyMessage];
+            const updatedConv = { 
+              ...current, 
+              messages: updatedMessages,
+              updatedAt: new Date().toISOString()
+            };
+            
+            setCurrentConversation(updatedConv);
+            
+            // Auto-restart backend after 3 seconds
+            setTimeout(async () => {
+              if (window.electronAPI?.restartBackend) {
+                await window.electronAPI.restartBackend();
+                
+                // Add restart notification
+                setConversations(prevConvs => {
+                  const updatedWithRestart = prevConvs.map(c => {
+                    if (c.id === current.id) {
+                      const restartMessage = {
+                        id: (Date.now() + 1).toString(),
+                        content: '✅ Backend restarted successfully',
+                        role: 'assistant',
+                        timestamp: new Date().toISOString(),
+                        success: true
+                      };
+                      
+                      const finalMessages = [...updatedMessages, restartMessage];
+                      const finalConv = { 
+                        ...c, 
+                        messages: finalMessages,
+                        updatedAt: new Date().toISOString()
+                      };
+                      
+                      setCurrentConversation(finalConv);
+                      return finalConv;
+                    }
+                    return c;
+                  });
+                  return updatedWithRestart;
+                });
+              }
+            }, 3000);
+            
+            return prev.map(c => c.id === current.id ? updatedConv : c);
+          }
+          return prev;
+        });
+      }
+    };
+    
+    if (window.electronAPI?.onHotkeyPressed) {
+      window.electronAPI.onHotkeyPressed(handleHotkey);
+    }
+
+    // Only clean up on unmount
+    return () => {
+      // Don't remove all listeners, other components might be using them
+      // The Electron main process manages the actual hotkey registration
+    };
+  }, []); // Empty dependency - only run once
 
   useEffect(() => {
     scrollToBottom();
@@ -175,7 +259,7 @@ export default function AssistantPage() {
       setCurrentConversation(finalConv);
       setConversations(prev => prev.map(c => c.id === conv.id ? finalConv : c));
 
-      // Auto-speak if enabled and message was successful
+     
       if (autoSpeak && result.success && assistantMessage.content) {
         try {
           await fetch('http://127.0.0.1:8000/speak', {
@@ -214,9 +298,9 @@ export default function AssistantPage() {
 
   return (
     <div className="flex h-screen bg-stone-950">
-      {/* Sidebar */}
+
       <div className="w-72 flex flex-col bg-stone-900/50 backdrop-blur-xl border-r border-stone-800/50">
-        {/* Header */}
+
         <div className="p-6 border-b border-stone-800/50">
           <div className="flex items-center gap-3 mb-6">
             <div className="w-12 h-12 flex items-center justify-center">
@@ -237,7 +321,6 @@ export default function AssistantPage() {
           </Button>
         </div>
 
-        {/* Conversations List - Fixed Height */}
         <div className="flex-1 overflow-y-auto p-3 min-h-0">
           <div className="space-y-2">
             {conversations.map((conv) => (

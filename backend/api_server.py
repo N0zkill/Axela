@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
 from pydantic import BaseModel
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 project_root = Path(__file__).parent
@@ -424,6 +424,176 @@ class AxelaAPIServer:
                     "success": False,
                     "message": str(e),
                     "voices": []
+                }
+
+        @app.get("/audio/devices")
+        async def get_audio_devices():
+            """Get available audio input devices."""
+            try:
+                devices = []
+                try:
+                    import sounddevice as sd
+                    device_list = sd.query_devices()
+                    
+                    # Get the default input device
+                    try:
+                        default_device = sd.query_devices(kind='input')
+                        default_name = default_device['name'] if default_device else None
+                    except:
+                        default_name = None
+                    
+                    for i, device in enumerate(device_list):
+                        # Only include input devices that are available
+                        if device['max_input_channels'] > 0:
+                            device_name = device['name']
+                            
+                            # Filter out common virtual/internal devices
+                            skip_keywords = [
+                                'Microsoft Sound Mapper',
+                                'Primary Sound',
+                                'Wave',
+                                'CABLE Input',
+                                'Line 1',
+                                'Stereo Mix',
+                                'What U Hear'
+                            ]
+                            
+                            # Skip devices with filter keywords (case insensitive)
+                            if any(keyword.lower() in device_name.lower() for keyword in skip_keywords):
+                                continue
+                            
+                            # Only include MME devices on Windows (filters out DirectSound duplicates)
+                            hostapi_name = sd.query_hostapis(device['hostapi'])['name']
+                            if hostapi_name != 'MME':
+                                continue
+                            
+                            devices.append({
+                                "id": str(i),
+                                "name": device_name,
+                                "channels": device['max_input_channels'],
+                                "is_default": device_name == default_name
+                            })
+                            
+                except ImportError:
+                    self.logger.log_warning("sounddevice not installed, audio device listing unavailable")
+                except Exception as e:
+                    self.logger.log_error(f"Error querying audio devices: {e}")
+                
+                return {
+                    "success": True,
+                    "devices": devices
+                }
+            except Exception as e:
+                self.logger.log_error(f"Error getting audio devices: {e}")
+                return {
+                    "success": False,
+                    "message": str(e),
+                    "devices": []
+                }
+
+        @app.post("/transcribe")
+        async def transcribe_audio(audio: UploadFile = File(...)):
+            """Transcribe audio to text using speech recognition."""
+            try:
+                import speech_recognition as sr
+                import tempfile
+                import os
+                import subprocess
+                
+                # Find FFmpeg
+                ffmpeg_exe = None
+                ffmpeg_paths = [
+                    os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.0-full_build\bin\ffmpeg.exe"),
+                    r"C:\ffmpeg\bin\ffmpeg.exe",
+                    r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+                    r"C:\ProgramData\chocolatey\bin\ffmpeg.exe",
+                    os.path.expandvars(r"%USERPROFILE%\scoop\apps\ffmpeg\current\bin\ffmpeg.exe"),
+                ]
+                
+                for path in ffmpeg_paths:
+                    if os.path.exists(path):
+                        ffmpeg_exe = path
+                        self.logger.log_info(f"Using FFmpeg at: {path}")
+                        break
+                
+                if not ffmpeg_exe:
+                    # Try using ffmpeg from PATH
+                    ffmpeg_exe = "ffmpeg"
+                
+                # Save uploaded file temporarily
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_input:
+                    content = await audio.read()
+                    temp_input.write(content)
+                    temp_input_path = temp_input.name
+                
+                # Convert to WAV format using ffmpeg directly
+                temp_wav_path = temp_input_path.replace('.webm', '.wav')
+                
+                try:
+                    # Convert using ffmpeg subprocess
+                    result = subprocess.run(
+                        [ffmpeg_exe, '-i', temp_input_path, '-ar', '16000', '-ac', '1', '-y', temp_wav_path],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                    
+                    if result.returncode != 0:
+                        self.logger.log_error(f"FFmpeg error: {result.stderr}")
+                        return {
+                            "success": False,
+                            "message": "Audio conversion failed",
+                            "text": ""
+                        }
+                    
+                    # Initialize recognizer
+                    recognizer = sr.Recognizer()
+                    
+                    # Load audio file
+                    with sr.AudioFile(temp_wav_path) as source:
+                        audio_data = recognizer.record(source)
+                    
+                    # Transcribe using Google Speech Recognition
+                    text = recognizer.recognize_google(audio_data)
+                    
+                    self.logger.log_info(f"Transcribed: {text}")
+                    
+                    return {
+                        "success": True,
+                        "text": text
+                    }
+                    
+                except sr.UnknownValueError:
+                    return {
+                        "success": False,
+                        "message": "Could not understand audio",
+                        "text": ""
+                    }
+                except sr.RequestError as e:
+                    return {
+                        "success": False,
+                        "message": f"Speech recognition service error: {str(e)}",
+                        "text": ""
+                    }
+                finally:
+                    # Clean up temp files
+                    try:
+                        os.unlink(temp_input_path)
+                    except:
+                        pass
+                    try:
+                        os.unlink(temp_wav_path)
+                    except:
+                        pass
+                        
+            except Exception as e:
+                self.logger.log_error(f"Error transcribing audio: {e}")
+                import traceback
+                traceback.print_exc()
+                return {
+                    "success": False,
+                    "message": str(e),
+                    "text": ""
                 }
 
         return app

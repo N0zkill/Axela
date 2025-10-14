@@ -19,12 +19,17 @@ class MouseController:
         try:
             position = self._resolve_target(target)
             if position:
+                print(f"Clicking at position: {position}")
                 pyautogui.click(position[0], position[1], button=button)
                 self.last_position = position
                 return True
-            return False
+            else:
+                print(f"Could not find target: {target}")
+                return False
         except Exception as e:
-            pass
+            print(f"Click error: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def double_click(self, target: Union[str, Tuple[int, int]]) -> bool:
@@ -124,24 +129,44 @@ class MouseController:
                     finder = SmartElementFinder()
 
                     description_lower = description.lower().strip()
+                    print(f"Searching for element: '{description}'")
 
-                    if "first" in description_lower and "result" in description_lower:
+                    if "first" in description_lower and ("result" in description_lower or "link" in description_lower):
+                        print("Looking for first search result...")
                         results = finder.find_search_results(screenshot_path)
+                        print(f"Found {len(results)} search results")
                         if results:
+                            print(f"First result: '{results[0].text}' at {results[0].coordinates}")
                             return results[0].coordinates
 
                     elif "button" in description_lower or "click" in description_lower:
+                        print("Looking for buttons/links...")
                         buttons = finder.find_buttons_and_links(screenshot_path)
+                        print(f"Found {len(buttons)} buttons/links")
                         if buttons:
                             for button in buttons:
                                 if any(word in button.text.lower() for word in description_lower.split()):
+                                    print(f"Matched button: '{button.text}' at {button.coordinates}")
                                     return button.coordinates
+                            print(f"No match, using first button: '{buttons[0].text}' at {buttons[0].coordinates}")
                             return buttons[0].coordinates
 
                     else:
+                        print(f"Searching for text: '{description}'")
                         elements = finder.find_elements_by_text(screenshot_path, description, fuzzy_match=True)
+                        print(f"Found {len(elements)} matching elements")
                         if elements:
+                            print(f"Best match: '{elements[0].text}' at {elements[0].coordinates} (confidence: {elements[0].confidence})")
                             return elements[0].coordinates
+                        else:
+                            print("No elements found, trying broader search...")
+                            # Try finding all text and see what we have
+                            all_elements = finder._extract_all_text(screenshot_path)
+                            print(f"Total text elements found: {len(all_elements)}")
+                            if all_elements:
+                                print("Sample of detected text:")
+                                for elem in all_elements[:10]:
+                                    print(f"  - '{elem.text}' at {elem.coordinates}")
 
                 finally:
                     try:
@@ -149,13 +174,16 @@ class MouseController:
                     except:
                         pass
 
-            except ImportError:
-                pass
+            except ImportError as e:
+                print(f"ImportError: {e}")
             except Exception as e:
-                pass
+                print(f"Exception in element finder: {e}")
+                import traceback
+                traceback.print_exc()
 
             position = self._find_text_on_screen(description)
             if position:
+                print(f"Found with _find_text_on_screen: {position}")
                 return position
 
             if Path(description).exists():

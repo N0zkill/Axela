@@ -244,19 +244,28 @@ TIMING GUIDELINES (REDUCED FOR SPEED):
 - After taking screenshots: wait 0.3 seconds for file save
 - Between mouse clicks: wait 0.2-0.5 seconds for UI updates
 
-CRITICAL WORKFLOW PATTERN:
-For tasks involving search results or dynamic content:
-1. Search command
-2. Wait command (1 second)
-3. Screenshot command (to see current results)
-4. Click command using TEXT-BASED targeting: {"target": "Exact visible text from screenshot"}
-5. Wait command (0.5 seconds if needed)
-6. Final screenshot (if requested)
+CRITICAL WORKFLOW PATTERN FOR SEARCH + CLICK:
+When user asks to search AND click (e.g., "search for X and click first result"):
+You MUST generate ALL commands in sequence:
+1. Web search command: {"command_type": "web", "action": "search", "parameters": {"query": "X"}}
+2. Wait command: {"command_type": "utility", "action": "wait", "parameters": {"duration": 1}}
+3. Screenshot command: {"command_type": "screenshot", "action": "capture", "parameters": {}}
+4. Wait command: {"command_type": "utility", "action": "wait", "parameters": {"duration": 0.3}}
+5. Click command: {"command_type": "mouse", "action": "click", "parameters": {"target": "first link"}}
 
-Example: "search for tee shirts, click first result, take screenshot"
-Should generate: [search, wait, screenshot, click with target="Cotton T-Shirts | Amazon.com" (or whatever the first result title actually says), wait, screenshot]
+CRITICAL: Even though you can't see the search results yet, you MUST include the click command.
+Use generic targets like "first link", "first result", "first search result" - the system will OCR the screen when executing the click.
 
-CRITICAL: Look at the screenshot and use the EXACT text you can see, not generic descriptions!
+Example: "search for minecraft and click first result"
+Should generate: [
+  {search for minecraft},
+  {wait 1 second},
+  {take screenshot},
+  {wait 0.3 seconds},
+  {click with target="first link"}
+]
+
+DO NOT stop after the screenshot - ALWAYS include the click command when the user requests it!
 
 AUTONOMOUS VISUAL CONTEXT:
 - When you can see a screenshot, analyze it to find exact pixel coordinates for elements
@@ -666,10 +675,20 @@ Analyze the screenshot now to identify the EXACT TEXT of the element you need to
             r'(what|where)\s+(is|are)\s+',
         ]
 
+        import re
+        
+        # Check if command includes click/select actions (even in compound commands)
+        if any(re.search(pattern, user_lower) for pattern in [
+            r'click\s+(on\s+)?(the\s+)?(first|second|third|last|any)',
+            r'click\s+(on\s+)?.*\b(result|link|button|element|item)',
+            r'select\s+(the\s+)?(first|second|third)',
+        ]):
+            return True
+
+        # Don't need visual context for simple navigation commands without clicks
         if any(user_lower.startswith(pattern) for pattern in [
             'search', 'open', 'navigate', 'go to', 'launch', 'start'
-        ]):
+        ]) and not any(keyword in user_lower for keyword in ['click', 'select', 'find on', 'locate on']):
             return False
 
-        import re
         return any(re.search(pattern, user_lower) for pattern in immediate_visual_patterns)

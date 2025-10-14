@@ -44,14 +44,14 @@
     "max_threads": 4
   },
   "hotkeys": {
-    "toggle_voice": "ctrl+alt+v",
+    "toggle_voice": "h",
     "emergency_stop": "ctrl+alt+x",
+    "minimize_to_tray": "ctrl+alt+m",
     "screenshot": "ctrl+alt+s",
-    "show_hide": "ctrl+alt+a",
     "repeat_last": "ctrl+alt+r",
     "command_history": "ctrl+alt+h"
   },
   "custom": {
-    "mode": "chat"
+    "mode": "manual"
   }
 }

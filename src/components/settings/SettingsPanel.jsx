@@ -5,8 +5,9 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import { MessageSquare, Shield, Zap, Mic, Save, RefreshCw } from "lucide-react";
+import { MessageSquare, Shield, Zap, Mic, Save, RefreshCw, Keyboard } from "lucide-react";
 import { motion } from "framer-motion";
+import KeybindCapture from "./KeybindCapture";
 
 export default function SettingsPanel({ axelaAPI }) {
   const [config, setConfig] = useState(null);
@@ -15,6 +16,7 @@ export default function SettingsPanel({ axelaAPI }) {
   const [saving, setSaving] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [availableVoices, setAvailableVoices] = useState([]);
+  const [availableMicrophones, setAvailableMicrophones] = useState([]);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -48,8 +50,23 @@ export default function SettingsPanel({ axelaAPI }) {
     }
   };
 
+  const loadMicrophones = async () => {
+    try {
+      const response = await fetch('http://127.0.0.1:8000/audio/devices');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.devices) {
+          setAvailableMicrophones(data.devices);
+        }
+      }
+    } catch (error) {
+      console.error("Error loading microphones:", error);
+    }
+  };
+
   useEffect(() => {
     loadConfig();
+    loadMicrophones();
   }, [loadConfig]);
 
   // Update local config state (doesn't save to backend yet)
@@ -89,6 +106,13 @@ export default function SettingsPanel({ axelaAPI }) {
 
       // Reload config to ensure sync
       await loadConfig();
+
+      // Reload hotkeys if they changed
+      if (JSON.stringify(config.hotkeys) !== JSON.stringify(originalConfig.hotkeys)) {
+        if (window.electronAPI?.reloadHotkeys) {
+          await window.electronAPI.reloadHotkeys();
+        }
+      }
 
       // Notify other components
       window.dispatchEvent(new CustomEvent('axela-config-changed', {
@@ -290,16 +314,16 @@ export default function SettingsPanel({ axelaAPI }) {
           </Card>
         </motion.div>
 
-        {/* Voice Settings */}
+        {/* Voice Input Settings */}
         <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.3 }}>
           <Card className="bg-stone-900/50 border-stone-800/50 h-full">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-white">
                 <Mic className="w-5 h-5 text-orange-400" />
-                Voice & TTS
+                Voice Input
               </CardTitle>
               <CardDescription className="text-stone-400">
-                Voice recognition and text-to-speech settings
+                Microphone and voice recognition settings
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -313,6 +337,45 @@ export default function SettingsPanel({ axelaAPI }) {
                   onCheckedChange={(checked) => updateLocalSetting("voice", { enabled: checked })}
                 />
               </div>
+              <div>
+                <Label className="text-stone-200">Microphone</Label>
+                <Select
+                  value={config.voice?.microphone_device || "default"}
+                  onValueChange={(value) => updateLocalSetting("voice", { microphone_device: value === "default" ? null : value })}
+                >
+                  <SelectTrigger className="bg-stone-800/50 border-stone-700/50 text-stone-100 mt-2">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-stone-800 border-stone-700">
+                    <SelectItem value="default">System Default</SelectItem>
+                    {availableMicrophones.map((mic) => (
+                      <SelectItem key={mic.id} value={mic.id}>
+                        {mic.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-stone-500 mt-1">
+                  Select your microphone input device
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        {/* Text-to-Speech Settings */}
+        <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.3 }}>
+          <Card className="bg-stone-900/50 border-stone-800/50 h-full">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-white">
+                <MessageSquare className="w-5 h-5 text-orange-400" />
+                Text-to-Speech
+              </CardTitle>
+              <CardDescription className="text-stone-400">
+                Voice output and speech synthesis settings
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label className="text-stone-200">Auto-Speak Responses</Label>
@@ -380,7 +443,7 @@ export default function SettingsPanel({ axelaAPI }) {
                 </div>
               )}
               <div>
-                <Label className="text-stone-200">TTS Volume</Label>
+                <Label className="text-stone-200">Volume</Label>
                 <Slider
                   value={[config.voice?.tts_volume * 100 || 80]}
                   onValueChange={([value]) => updateLocalSetting("voice", { tts_volume: value / 100 })}
@@ -393,7 +456,7 @@ export default function SettingsPanel({ axelaAPI }) {
                 </p>
               </div>
               <div>
-                <Label className="text-stone-200">TTS Speed</Label>
+                <Label className="text-stone-200">Speed</Label>
                 <Slider
                   value={[config.voice?.tts_rate || 200]}
                   onValueChange={([value]) => updateLocalSetting("voice", { tts_rate: value })}
@@ -464,13 +527,69 @@ export default function SettingsPanel({ axelaAPI }) {
             </CardContent>
           </Card>
         </motion.div>
+
+        {/* Hotkeys Settings */}
+        <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.5 }}>
+          <Card className="bg-stone-900/50 border-stone-800/50 h-full">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-white">
+                <Keyboard className="w-5 h-5 text-orange-400" />
+                Hotkeys
+              </CardTitle>
+              <CardDescription className="text-stone-400">
+                Customize keyboard shortcuts
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label className="text-stone-200">Toggle Voice</Label>
+                <div className="mt-2">
+                  <KeybindCapture
+                    value={config.hotkeys?.toggle_voice || ""}
+                    onChange={(value) => updateLocalSetting("hotkeys", { toggle_voice: value })}
+                    placeholder="Click to set key..."
+                  />
+                </div>
+                <p className="text-xs text-stone-500 mt-1">
+                  Toggle voice input on/off
+                </p>
+              </div>
+              <div>
+                <Label className="text-stone-200">Minimize to Tray</Label>
+                <div className="mt-2">
+                  <KeybindCapture
+                    value={config.hotkeys?.minimize_to_tray || ""}
+                    onChange={(value) => updateLocalSetting("hotkeys", { minimize_to_tray: value })}
+                    placeholder="Click to set key..."
+                  />
+                </div>
+                <p className="text-xs text-stone-500 mt-1">
+                  Hide app to system tray (access from tray icon)
+                </p>
+              </div>
+              <div>
+                <Label className="text-stone-200">Emergency Stop</Label>
+                <div className="mt-2">
+                  <KeybindCapture
+                    value={config.hotkeys?.emergency_stop || ""}
+                    onChange={(value) => updateLocalSetting("hotkeys", { emergency_stop: value })}
+                    placeholder="Click to set key..."
+                  />
+                </div>
+                <p className="text-xs text-stone-500 mt-1">
+                  Stop all running commands immediately
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
       </div>
 
       {/* Action Buttons */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.5 }}
+        transition={{ delay: 0.6 }}
         className="flex gap-3 justify-center pt-4"
       >
         <Button

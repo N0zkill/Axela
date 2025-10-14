@@ -13,11 +13,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   appMinimize: () => ipcRenderer.invoke('app-minimize'),
   appMaximize: () => ipcRenderer.invoke('app-maximize'),
 
+  reloadHotkeys: () => ipcRenderer.invoke('reload-hotkeys'),
+  restartBackend: () => ipcRenderer.invoke('restart-backend'),
+
   onBackendLog: (callback) => {
     ipcRenderer.on('backend-log', (event, data) => callback(data));
   },
   onBackendError: (callback) => {
     ipcRenderer.on('backend-error', (event, data) => callback(data));
+  },
+  onHotkeyPressed: (callback) => {
+    ipcRenderer.on('hotkey-pressed', (event, hotkey) => callback(hotkey));
   },
 
   removeAllListeners: (channel) => {

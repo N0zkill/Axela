@@ -1,18 +1,71 @@
-import React, { useState, useRef, useImperativeHandle, forwardRef } from "react";
+import React, { useState, useRef, useImperativeHandle, forwardRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Send, Loader2, Sparkles } from "lucide-react";
 import { motion } from "framer-motion";
+import VoiceInput from "./VoiceInput";
 
 const ChatInput = forwardRef(({ onSendMessage, isProcessing, disabled }, ref) => {
   const [message, setMessage] = useState("");
   const textareaRef = useRef(null);
+  const voiceInputRef = useRef(null);
 
   useImperativeHandle(ref, () => ({
     focus: () => {
       textareaRef.current?.focus();
     }
   }));
+
+  const handleVoiceInput = async (audioBlob) => {
+    try {
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'audio.wav');
+
+      const response = await fetch('http://127.0.0.1:8000/transcribe', {
+        method: 'POST',
+        body: formData
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.text) {
+          // Auto-submit the transcribed text
+          onSendMessage(data.text.trim());
+        } else if (data.message) {
+          console.error("Transcription error:", data.message);
+        }
+      }
+    } catch (error) {
+      console.error("Error transcribing audio:", error);
+    }
+  };
+
+  useEffect(() => {
+    const handleHotkey = (hotkey) => {
+      // Don't check disabled/isProcessing here - let the ref check current state
+      if (hotkey === 'toggle_voice') {
+        // Check current state when hotkey is pressed
+        if (voiceInputRef.current && !voiceInputRef.current.isRecording()) {
+          // Only start if not disabled/processing
+          const inputElement = textareaRef.current;
+          const isInputDisabled = inputElement?.disabled;
+          if (!isInputDisabled) {
+            voiceInputRef.current.toggleRecording();
+          }
+        } else if (voiceInputRef.current) {
+          // Always allow stopping
+          voiceInputRef.current.toggleRecording();
+        }
+      }
+    };
+
+    if (window.electronAPI?.onHotkeyPressed) {
+      window.electronAPI.onHotkeyPressed(handleHotkey);
+    }
+
+    // Don't remove listeners on unmount - other components might be using them
+    // The Electron main process manages the actual hotkey registration
+  }, []); // Empty dependency array - only run once on mount
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -46,6 +99,15 @@ const ChatInput = forwardRef(({ onSendMessage, isProcessing, disabled }, ref) =>
             disabled={disabled || isProcessing}
             className="bg-stone-800/50 text-stone-100 px-4 py-2 text-sm border border-stone-700/50 focus:border-orange-500/50 focus-visible:ring-2 focus-visible:ring-orange-500/20 disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-stone-800/30 flex-1 placeholder:text-stone-500 resize-none min-h-[38px] max-h-[160px] rounded-lg shadow-sm transition-all duration-200"
             rows={1} />
+        </div>
+
+        <div>
+          <VoiceInput 
+            ref={voiceInputRef}
+            onVoiceInput={handleVoiceInput}
+            isProcessing={isProcessing}
+            disabled={disabled}
+          />
         </div>
 
         <Button

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, globalShortcut, Tray, Menu, nativeImage, net } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const isDev = require('electron-is-dev');
@@ -11,6 +11,8 @@ class AxelaDesktop {
     this.mainWindow = null;
     this.pythonProcess = null;
     this.isQuitting = false;
+    this.registeredHotkeys = new Set();
+    this.tray = null;
   }
 
   createWindow() {
@@ -70,9 +72,10 @@ class AxelaDesktop {
 
     console.log('Starting Python backend:', pythonPath);
 
-    const pythonExecutable = process.platform === 'win32' ? 'py' : 'python';
+    // Use 'py' on Windows, 'python3' on others
+    const pythonCommand = process.platform === 'win32' ? 'py' : 'python3';
 
-    this.pythonProcess = spawn(pythonExecutable, [pythonPath, '--api-mode', '--host', '127.0.0.1', '--port', '8000'], {
+    this.pythonProcess = spawn(pythonCommand, [pythonPath, '--api-mode', '--host', '127.0.0.1', '--port', '8000'], {
       cwd: path.dirname(pythonPath),
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -102,6 +105,237 @@ class AxelaDesktop {
       this.pythonProcess.kill();
       this.pythonProcess = null;
     }
+  }
+
+  createTray() {
+    // Create a simple tray icon
+    const icon = nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAIDSURBVFhH7ZbPK0RRGMXfmzGTH0mhLCRlY2Oj/AFsbCwsLCz8A2zs/ANsbP0BNhY2FhYWioWFhZKFhYWFhR/JjzLMvE/nO3Pfa+69782beRs+9U7de+ec7517752ZJP+peDxuYRiGYRiGYf4ner0eHA6Hg16vB6vVCpPJBJPJBKvVCh6PB263Gw6HQxOJRCKQyWQgl8tZr9erCYfDkMlkkEqlrFarJRKJhCWTSSiVSiiVStZqtUQikbBkMgmFQgGFQsHa7bZIJBKWTCYhk8kgl8tBrVajWq2yZrMpEolEIpGI1Ot1qFQqKJVK1mg0RCKRSCQSiUQ8Ho/b7XY4nU44nU643W54vV54PB5YrVaYzWaYTCYYDAbo9XrodDrodDpoNBqo1WpQqVRQKBRQKBSQy+WQy+Ugk8lAJpOBVCoFqVQKUqkUJBIJSCQSkEgkIBaLQSwWg0gkApFIBEKhEIRCIQiFQhAIBCAQCEAgEAC/3w98Ph/4fD7w+Xzg8/nA5/OBz+cDj8cDHo8HXC4XuFwucLlc4HK5wOVygcvlApfLBS6XC1wuF7hcLnC5XOByucDhcIDD4QCHwwEOhwMcDgfYbDaw2WxgsVjAYrGAxWIBi8UCFosFLBYLWCwWMJlMYDKZwGQygclkApPJBCaTCUwmE5hMJjAYDGAwGMBgMIDBYACDwQAGgwF0Oh3odDrQ6XSg0+lAo9GARqMBjUYDarU6Sfp/JQB8A+vO/NfPAAAAAElFTkSuQmCC');
+    
+    this.tray = new Tray(icon.resize({ width: 16, height: 16 }));
+    
+    const contextMenu = Menu.buildFromTemplate([
+      {
+        label: 'Show AXELA',
+        click: () => {
+          if (this.mainWindow) {
+            this.mainWindow.show();
+            this.mainWindow.focus();
+          }
+        }
+      },
+      {
+        label: 'Hide to Tray',
+        click: () => {
+          if (this.mainWindow) {
+            this.mainWindow.hide();
+          }
+        }
+      },
+      { type: 'separator' },
+      {
+        label: 'Quit AXELA',
+        click: () => {
+          this.isQuitting = true;
+          app.quit();
+        }
+      }
+    ]);
+    
+    this.tray.setToolTip('AXELA - AI Assistant (Click to show/hide)');
+    this.tray.setContextMenu(contextMenu);
+    
+    // Single click to show/hide
+    this.tray.on('click', () => {
+      if (this.mainWindow) {
+        if (this.mainWindow.isVisible()) {
+          this.mainWindow.hide();
+        } else {
+          this.mainWindow.show();
+          this.mainWindow.focus();
+        }
+      }
+    });
+    
+    // Double click also works
+    this.tray.on('double-click', () => {
+      if (this.mainWindow) {
+        if (this.mainWindow.isVisible()) {
+          this.mainWindow.hide();
+        } else {
+          this.mainWindow.show();
+          this.mainWindow.focus();
+        }
+      }
+    });
+  }
+
+  async loadAndRegisterHotkeys() {
+    try {
+      const request = net.request({
+        method: 'GET',
+        url: 'http://127.0.0.1:8000/config'
+      });
+
+      request.on('response', (response) => {
+        let data = '';
+        
+        response.on('data', (chunk) => {
+          data += chunk.toString();
+        });
+        
+        response.on('end', () => {
+          try {
+            const config = JSON.parse(data);
+            const hotkeys = config.config?.hotkeys || {};
+            this.registerHotkeys(hotkeys);
+          } catch (error) {
+            console.error('Failed to parse hotkeys config:', error);
+          }
+        });
+      });
+
+      request.on('error', (error) => {
+        console.error('Failed to load hotkeys:', error);
+      });
+
+      request.end();
+    } catch (error) {
+      console.error('Failed to load hotkeys:', error);
+    }
+  }
+
+  registerHotkeys(hotkeys) {
+    // Unregister all existing hotkeys
+    this.unregisterAllHotkeys();
+
+    // Register toggle voice
+    if (hotkeys.toggle_voice) {
+      const accelerator = this.normalizeAccelerator(hotkeys.toggle_voice);
+      if (accelerator) {
+        try {
+          const registered = globalShortcut.register(accelerator, () => {
+            if (this.mainWindow) {
+              this.mainWindow.webContents.send('hotkey-pressed', 'toggle_voice');
+            }
+          });
+          if (registered) {
+            this.registeredHotkeys.add(accelerator);
+            console.log(`Registered toggle voice hotkey: ${accelerator}`);
+          }
+        } catch (error) {
+          console.error(`Failed to register toggle voice hotkey ${accelerator}:`, error);
+        }
+      }
+    }
+
+    // Register minimize to tray
+    if (hotkeys.minimize_to_tray) {
+      const accelerator = this.normalizeAccelerator(hotkeys.minimize_to_tray);
+      if (accelerator) {
+        try {
+          const registered = globalShortcut.register(accelerator, () => {
+            if (this.mainWindow) {
+              if (this.mainWindow.isVisible()) {
+                this.mainWindow.hide();
+                console.log('App minimized to tray');
+              } else {
+                this.mainWindow.show();
+                this.mainWindow.focus();
+                console.log('App restored from tray');
+              }
+            }
+          });
+          if (registered) {
+            this.registeredHotkeys.add(accelerator);
+            console.log(`Registered minimize to tray hotkey: ${accelerator}`);
+          }
+        } catch (error) {
+          console.error(`Failed to register minimize to tray hotkey ${accelerator}:`, error);
+        }
+      }
+    }
+
+    // Register emergency stop
+    if (hotkeys.emergency_stop) {
+      const accelerator = this.normalizeAccelerator(hotkeys.emergency_stop);
+      if (accelerator) {
+        try {
+          const registered = globalShortcut.register(accelerator, () => {
+            console.log('🚨 EMERGENCY STOP TRIGGERED! 🚨');
+            
+            // Kill the Python backend process
+            if (this.pythonProcess && this.pythonProcess.pid) {
+              console.log(`Killing Python backend process (PID: ${this.pythonProcess.pid})...`);
+              
+              try {
+                if (process.platform === 'win32') {
+                  // On Windows, use taskkill to force terminate
+                  const { exec } = require('child_process');
+                  exec(`taskkill /PID ${this.pythonProcess.pid} /T /F`, (error) => {
+                    if (error) {
+                      console.error('Error killing process:', error);
+                    } else {
+                      console.log('✅ Python backend terminated');
+                    }
+                  });
+                } else {
+                  // On Unix-like systems
+                  this.pythonProcess.kill('SIGKILL');
+                }
+                
+                this.pythonProcess = null;
+              } catch (error) {
+                console.error('Error during emergency stop:', error);
+              }
+            } else {
+              console.log('No Python process to kill');
+            }
+            
+            // Notify the UI
+            if (this.mainWindow) {
+              this.mainWindow.webContents.send('hotkey-pressed', 'emergency_stop');
+            }
+          });
+          if (registered) {
+            this.registeredHotkeys.add(accelerator);
+            console.log(`✅ Registered emergency stop hotkey: ${accelerator}`);
+          } else {
+            console.error(`❌ Failed to register emergency stop hotkey: ${accelerator}`);
+          }
+        } catch (error) {
+          console.error(`Failed to register emergency stop hotkey ${accelerator}:`, error);
+        }
+      }
+    }
+  }
+
+  normalizeAccelerator(hotkey) {
+    if (!hotkey) return null;
+    
+    // Convert to Electron's format
+    return hotkey
+      .split('+')
+      .map(key => {
+        const lower = key.toLowerCase().trim();
+        if (lower === 'ctrl') return 'CommandOrControl';
+        if (lower === 'alt') return 'Alt';
+        if (lower === 'shift') return 'Shift';
+        if (lower === 'cmd' || lower === 'command') return 'Command';
+        if (lower === 'space') return 'Space';
+        return key.charAt(0).toUpperCase() + key.slice(1).toLowerCase();
+      })
+      .join('+');
+  }
+
+  unregisterAllHotkeys() {
+    this.registeredHotkeys.forEach(accelerator => {
+      try {
+        globalShortcut.unregister(accelerator);
+      } catch (error) {
+        console.error(`Failed to unregister hotkey ${accelerator}:`, error);
+      }
+    });
+    this.registeredHotkeys.clear();
   }
 
   setupIPC() {
@@ -161,6 +395,20 @@ class AxelaDesktop {
         }
       }
     });
+
+    ipcMain.handle('reload-hotkeys', async () => {
+      await this.loadAndRegisterHotkeys();
+      return { success: true };
+    });
+
+    ipcMain.handle('restart-backend', () => {
+      console.log('Restarting backend...');
+      this.stopPythonBackend();
+      setTimeout(() => {
+        this.startPythonBackend();
+      }, 1000);
+      return { success: true };
+    });
   }
 }
 
@@ -168,8 +416,14 @@ const axelaDesktop = new AxelaDesktop();
 
 app.whenReady().then(() => {
   axelaDesktop.createWindow();
+  axelaDesktop.createTray();
   axelaDesktop.setupIPC();
   axelaDesktop.startPythonBackend();
+
+  // Wait for backend to start, then load hotkeys
+  setTimeout(() => {
+    axelaDesktop.loadAndRegisterHotkeys();
+  }, 2000);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -189,6 +443,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   axelaDesktop.isQuitting = true;
+  axelaDesktop.unregisterAllHotkeys();
   axelaDesktop.stopPythonBackend();
 });
 
