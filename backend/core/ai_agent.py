@@ -130,18 +130,18 @@ AVAILABLE COMMAND TYPES AND ACTIONS:
    - rename: Rename file or folder
 
 6. PROGRAM (command_type: "program"):
-   - start: Start a program
-   - close: Close a program
-   - minimize: Minimize window
-   - maximize: Maximize window
+   - start: Start a program (parameters: {"program": "notepad"})
+   - close: Close a program (parameters: {"program": "notepad"})
+   - minimize: Minimize window (parameters: {"program": "notepad"})
+   - maximize: Maximize window (parameters: {"program": "notepad"})
 
 7. WEB (command_type: "web"):
-   - search: Search the web
-   - navigate: Navigate to URL
+   - search: Search the web (parameters: {"query": "search term"})
+   - navigate: Navigate to URL (parameters: {"url": "https://example.com"})
 
 8. UTILITY (command_type: "utility"):
-   - wait: Wait for specified duration in seconds
-   - delay: Same as wait
+   - wait: Wait for specified duration in seconds (parameters: {"duration": 2})
+   - delay: Same as wait (parameters: {"duration": 2})
 
 SAFETY LEVELS:
 - safe: Basic operations (mouse, keyboard, screenshot)
@@ -149,6 +149,25 @@ SAFETY LEVELS:
 - dangerous: System commands, administrative tasks
 
 RESPONSE FORMAT - YOU MUST RESPOND WITH VALID JSON ONLY:
+
+Example 1 (Program command):
+{
+    "success": true,
+    "commands": [
+        {
+            "command_type": "program",
+            "action": "start",
+            "parameters": {"program": "notepad"},
+            "confidence": 0.95,
+            "raw_text": "open notepad"
+        }
+    ],
+    "explanation": "I'll start the Notepad program",
+    "warnings": [],
+    "requires_confirmation": false
+}
+
+Example 2 (Mouse command):
 {
     "success": true,
     "commands": [
@@ -161,6 +180,23 @@ RESPONSE FORMAT - YOU MUST RESPOND WITH VALID JSON ONLY:
         }
     ],
     "explanation": "I'll click on the text 'Minecraft Official Site' that I can see in the screenshot",
+    "warnings": [],
+    "requires_confirmation": false
+}
+
+Example 3 (Keyboard command):
+{
+    "success": true,
+    "commands": [
+        {
+            "command_type": "keyboard",
+            "action": "type",
+            "parameters": {"text": "hello world"},
+            "confidence": 0.95,
+            "raw_text": "type hello world"
+        }
+    ],
+    "explanation": "I'll type 'hello world'",
     "warnings": [],
     "requires_confirmation": false
 }

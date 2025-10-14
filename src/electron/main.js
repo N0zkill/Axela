@@ -70,7 +70,9 @@ class AxelaDesktop {
 
     console.log('Starting Python backend:', pythonPath);
 
-    this.pythonProcess = spawn('python', [pythonPath, '--api-mode', '--host', '127.0.0.1', '--port', '8000'], {
+    const pythonExecutable = process.platform === 'win32' ? 'py' : 'python';
+
+    this.pythonProcess = spawn(pythonExecutable, [pythonPath, '--api-mode', '--host', '127.0.0.1', '--port', '8000'], {
       cwd: path.dirname(pythonPath),
       stdio: ['pipe', 'pipe', 'pipe']
     });

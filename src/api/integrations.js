@@ -3,10 +3,15 @@ import { resolveCommand } from './commandAliases';
 
 export const ExecuteCommand = async (axelaAPI, command, options = {}) => {
   try {
-    const resolvedCommand = resolveCommand(command);
-    console.log(`Command resolved: "${command}" -> "${resolvedCommand}"`);
-
     const mode = options.mode || (options.aiMode !== false ? "ai" : "manual");
+
+    // Only apply command aliases in manual mode
+    const resolvedCommand = mode === "manual" ? resolveCommand(command) : command;
+
+    if (resolvedCommand !== command) {
+      console.log(`Command resolved: "${command}" -> "${resolvedCommand}"`);
+    }
+
     return await axelaAPI.executeCommand(resolvedCommand, mode);
   } catch (error) {
     console.error('Command execution error:', error);

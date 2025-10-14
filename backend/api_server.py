@@ -250,7 +250,7 @@ class AxelaAPIServer:
                             elif key == "tts_engine" and isinstance(value, str):
                                 value = TTSEngine(value)
                             setattr(self.config.voice, key, value)
-                    
+
                     # Handle voice change without full reinitialization
                     if 'tts_voice' in settings and self.tts_service:
                         try:
@@ -260,7 +260,7 @@ class AxelaAPIServer:
                             self.logger.log_info(f"TTS voice changed to: {settings['tts_voice']}")
                         except Exception as e:
                             self.logger.log_error(f"Failed to set TTS voice: {e}")
-                    
+
                     # Reinitialize TTS if settings changed (excluding voice which is handled above)
                     if any(key in settings for key in ['tts_engine', 'tts_rate', 'tts_volume', 'language']):
                         try:
@@ -350,11 +350,11 @@ class AxelaAPIServer:
 
                 if not self.tts_service:
                     return {"success": False, "message": "TTS service not initialized"}
-                
+
                 if not self.tts_service.is_available():
                     engine_info = self.tts_service.get_engine_info()
                     return {
-                        "success": False, 
+                        "success": False,
                         "message": f"TTS engine not available. Engine: {engine_info.get('engine', 'unknown')}"
                     }
 
@@ -441,6 +441,11 @@ class AxelaAPIServer:
 
             if not ai_response.success:
                 return False, ai_response.explanation
+
+            # Debug: Log what the AI generated
+            self.logger.log_info(f"AI generated {len(ai_response.commands)} commands")
+            for i, cmd in enumerate(ai_response.commands):
+                self.logger.log_info(f"Command {i+1}: type={cmd.command_type.value}, action={cmd.action.value}, params={cmd.parameters}")
 
             total_success = True
             messages = []
