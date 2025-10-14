@@ -71,20 +71,20 @@ export default function AssistantPage() {
     const handleHotkey = async (hotkey) => {
       if (hotkey === 'emergency_stop') {
         // Show emergency stop notification
-        console.log('Emergency stop activated!');
+        console.log('Emergency stop activated in UI!');
         
-        // Use setConversations callback to get latest state
+        // Add emergency message
+        const emergencyMessage = {
+          id: Date.now().toString(),
+          content: '🚨 Emergency Stop Activated!\n\nThe Axela backend has been forcefully terminated. All running commands have been stopped.\n\nThe backend will automatically restart in 2 seconds...',
+          role: 'assistant',
+          timestamp: new Date().toISOString(),
+          success: false
+        };
+        
         setConversations(prev => {
-          const current = prev.find(c => c.id === currentConversation?.id);
+          const current = prev.find(c => c.isActive);
           if (current) {
-            const emergencyMessage = {
-              id: Date.now().toString(),
-              content: '⚠️ Emergency stop activated - Backend process terminated. The backend will restart automatically in 3 seconds...',
-              role: 'assistant',
-              timestamp: new Date().toISOString(),
-              success: false
-            };
-            
             const updatedMessages = [...(current.messages || []), emergencyMessage];
             const updatedConv = { 
               ...current, 
@@ -93,45 +93,38 @@ export default function AssistantPage() {
             };
             
             setCurrentConversation(updatedConv);
-            
-            // Auto-restart backend after 3 seconds
-            setTimeout(async () => {
-              if (window.electronAPI?.restartBackend) {
-                await window.electronAPI.restartBackend();
-                
-                // Add restart notification
-                setConversations(prevConvs => {
-                  const updatedWithRestart = prevConvs.map(c => {
-                    if (c.id === current.id) {
-                      const restartMessage = {
-                        id: (Date.now() + 1).toString(),
-                        content: '✅ Backend restarted successfully',
-                        role: 'assistant',
-                        timestamp: new Date().toISOString(),
-                        success: true
-                      };
-                      
-                      const finalMessages = [...updatedMessages, restartMessage];
-                      const finalConv = { 
-                        ...c, 
-                        messages: finalMessages,
-                        updatedAt: new Date().toISOString()
-                      };
-                      
-                      setCurrentConversation(finalConv);
-                      return finalConv;
-                    }
-                    return c;
-                  });
-                  return updatedWithRestart;
-                });
-              }
-            }, 3000);
-            
             return prev.map(c => c.id === current.id ? updatedConv : c);
           }
           return prev;
         });
+        
+        // Show restart notification after backend auto-restarts (4 seconds)
+        setTimeout(() => {
+          console.log('Adding restart success message');
+          const restartMessage = {
+            id: Date.now().toString() + '_restart',
+            content: '✅ Backend Restarted Successfully\n\nAxela is back online and ready to accept commands.',
+            role: 'assistant',
+            timestamp: new Date().toISOString(),
+            success: true
+          };
+          
+          setConversations(prev => {
+            const current = prev.find(c => c.isActive);
+            if (current) {
+              const updatedMessages = [...(current.messages || []), restartMessage];
+              const updatedConv = { 
+                ...current, 
+                messages: updatedMessages,
+                updatedAt: new Date().toISOString()
+              };
+              
+              setCurrentConversation(updatedConv);
+              return prev.map(c => c.id === current.id ? updatedConv : c);
+            }
+            return prev;
+          });
+        }, 4000);
       }
     };
     
@@ -275,19 +268,27 @@ export default function AssistantPage() {
     } catch (error) {
       console.error("Error sending message:", error);
 
-      const errorMessage = {
-        id: (Date.now() + 1).toString(),
-        content: `I encountered an error: ${error.message}. Please make sure the Axela backend is running.`,
-        role: "assistant",
-        timestamp: new Date().toISOString(),
-        success: false
-      };
+      // Check if backend is restarting before showing error
+      const isRestarting = window.electronAPI?.isBackendRestarting 
+        ? await window.electronAPI.isBackendRestarting() 
+        : false;
 
-      const finalMessages = [...updatedMessages, errorMessage];
-      const finalConv = { ...updatedConv, messages: finalMessages, updatedAt: new Date().toISOString() };
+      // Don't show error message if backend is restarting
+      if (!isRestarting) {
+        const errorMessage = {
+          id: (Date.now() + 1).toString(),
+          content: `I encountered an error: ${error.message}. Please make sure the Axela backend is running.`,
+          role: "assistant",
+          timestamp: new Date().toISOString(),
+          success: false
+        };
 
-      setCurrentConversation(finalConv);
-      setConversations(prev => prev.map(c => c.id === conv.id ? finalConv : c));
+        const finalMessages = [...updatedMessages, errorMessage];
+        const finalConv = { ...updatedConv, messages: finalMessages, updatedAt: new Date().toISOString() };
+
+        setCurrentConversation(finalConv);
+        setConversations(prev => prev.map(c => c.id === conv.id ? finalConv : c));
+      }
     } finally {
       setIsProcessing(false);
       setTimeout(() => {

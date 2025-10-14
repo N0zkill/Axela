@@ -52,6 +52,7 @@
     "command_history": "ctrl+alt+h"
   },
   "custom": {
-    "mode": "manual"
+    "mode": "chat",
+    "auto_speak_responses": true
   }
 }

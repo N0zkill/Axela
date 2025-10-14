@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   reloadHotkeys: () => ipcRenderer.invoke('reload-hotkeys'),
   restartBackend: () => ipcRenderer.invoke('restart-backend'),
+  isBackendRestarting: () => ipcRenderer.invoke('is-backend-restarting'),
 
   onBackendLog: (callback) => {
     ipcRenderer.on('backend-log', (event, data) => callback(data));

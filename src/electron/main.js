@@ -11,6 +11,7 @@ class AxelaDesktop {
     this.mainWindow = null;
     this.pythonProcess = null;
     this.isQuitting = false;
+    this.isRestarting = false;
     this.registeredHotkeys = new Set();
     this.tray = null;
   }
@@ -263,6 +264,9 @@ class AxelaDesktop {
           const registered = globalShortcut.register(accelerator, () => {
             console.log('🚨 EMERGENCY STOP TRIGGERED! 🚨');
             
+            // Set restarting flag
+            this.isRestarting = true;
+            
             // Kill the Python backend process
             if (this.pythonProcess && this.pythonProcess.pid) {
               console.log(`Killing Python backend process (PID: ${this.pythonProcess.pid})...`);
@@ -276,19 +280,39 @@ class AxelaDesktop {
                       console.error('Error killing process:', error);
                     } else {
                       console.log('✅ Python backend terminated');
+                      // Auto-restart after termination
+                      setTimeout(() => {
+                        console.log('Auto-restarting backend...');
+                        this.startPythonBackend();
+                        setTimeout(() => {
+                          this.isRestarting = false;
+                          console.log('✅ Backend restarted');
+                        }, 2000);
+                      }, 2000);
                     }
                   });
                 } else {
                   // On Unix-like systems
                   this.pythonProcess.kill('SIGKILL');
+                  // Auto-restart after termination
+                  setTimeout(() => {
+                    console.log('Auto-restarting backend...');
+                    this.startPythonBackend();
+                    setTimeout(() => {
+                      this.isRestarting = false;
+                      console.log('✅ Backend restarted');
+                    }, 2000);
+                  }, 2000);
                 }
                 
                 this.pythonProcess = null;
               } catch (error) {
                 console.error('Error during emergency stop:', error);
+                this.isRestarting = false;
               }
             } else {
               console.log('No Python process to kill');
+              this.isRestarting = false;
             }
             
             // Notify the UI
@@ -350,6 +374,11 @@ class AxelaDesktop {
 
     ipcMain.handle('send-command', async (event, command, mode = 'ai') => {
       try {
+        // Don't try to send commands while restarting
+        if (this.isRestarting) {
+          return { success: false, error: 'Backend is restarting' };
+        }
+
         const response = await fetch('http://localhost:8000/execute', {
           method: 'POST',
           headers: {
@@ -360,7 +389,10 @@ class AxelaDesktop {
 
         return await response.json();
       } catch (error) {
-        console.error('Failed to send command to backend:', error);
+        // Only log error if not restarting
+        if (!this.isRestarting) {
+          console.error('Failed to send command to backend:', error);
+        }
         return { success: false, error: error.message };
       }
     });
@@ -403,11 +435,20 @@ class AxelaDesktop {
 
     ipcMain.handle('restart-backend', () => {
       console.log('Restarting backend...');
+      this.isRestarting = true;
       this.stopPythonBackend();
       setTimeout(() => {
         this.startPythonBackend();
+        // Clear restarting flag after backend starts
+        setTimeout(() => {
+          this.isRestarting = false;
+        }, 2000);
       }, 1000);
       return { success: true };
+    });
+
+    ipcMain.handle('is-backend-restarting', () => {
+      return this.isRestarting;
     });
   }
 }
