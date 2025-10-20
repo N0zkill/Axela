@@ -9,7 +9,7 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 try:
-    from core.parser import NaturalLanguageParser
+    from core.parser import NaturalLanguageParser, CommandType, ActionType
     from core.executor import CommandExecutor
     from core.logger import AxelaLogger
     from core.ai_agent import AIAgent
@@ -52,26 +52,67 @@ class AxelaApp:
                 if success:
                     return True
 
-            parsed_command = self.parser.parse(text)
+            commands = self.parser.parse_sequence(text)
 
-            if not self.config.is_command_allowed(
-                parsed_command.command_type.value,
-                parsed_command.action.value
-            ):
-                print(f"Command not allowed: {text}")
-                return False
+            # Single command legacy behavior
+            if len(commands) == 1:
+                parsed_command = commands[0]
 
-            # Confirm dangerous commands
-            if self.config.requires_confirmation(parsed_command.action.value):
-                if not self._confirm_command(parsed_command):
-                    print("Command cancelled")
+                if not self.config.is_command_allowed(
+                    parsed_command.command_type.value,
+                    parsed_command.action.value
+                ):
+                    print(f"Command not allowed: {text}")
                     return False
 
-            # Execute command
-            result = self.executor.execute(parsed_command)
-            self.parser.add_context(parsed_command)
+                # Confirm dangerous commands
+                if self.config.requires_confirmation(parsed_command.action.value):
+                    if not self._confirm_command(parsed_command):
+                        print("Command cancelled")
+                        return False
 
-            return result.success
+                # Execute command
+                result = self.executor.execute(parsed_command)
+                self.parser.add_context(parsed_command)
+                return result.success
+
+            # Sequence execution
+            import time as _time
+            for idx, parsed_command in enumerate(commands, 1):
+                if not self.config.is_command_allowed(
+                    parsed_command.command_type.value,
+                    parsed_command.action.value
+                ):
+                    print(f"Step {idx} blocked: {parsed_command.command_type.value}/{parsed_command.action.value}")
+                    return False
+
+                if self.config.requires_confirmation(parsed_command.action.value):
+                    if not self._confirm_command(parsed_command):
+                        print("Command cancelled")
+                        return False
+
+                result = self.executor.execute(parsed_command)
+                self.parser.add_context(parsed_command)
+                if not result.success:
+                    print(f"Step {idx} failed: {result.message}")
+                    return False
+
+                if idx < len(commands):
+                    delay = 0.2
+                    try:
+                        if parsed_command.command_type == CommandType.PROGRAM and parsed_command.action == ActionType.START:
+                            delay = 1.5
+                        elif parsed_command.command_type == CommandType.WEB and parsed_command.action in [ActionType.SEARCH, ActionType.NAVIGATE]:
+                            delay = 1.0
+                        elif parsed_command.command_type == CommandType.SCREENSHOT:
+                            delay = 0.3
+                        elif parsed_command.command_type == CommandType.MOUSE and parsed_command.action in [ActionType.CLICK, ActionType.DOUBLE_CLICK, ActionType.RIGHT_CLICK]:
+                            delay = 0.4
+                    except Exception:
+                        delay = 0.2
+                    _time.sleep(delay)
+
+            return True
 
         except Exception as e:
             self.logger.log_error(f"Error processing command: {e}")

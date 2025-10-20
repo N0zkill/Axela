@@ -83,6 +83,141 @@ class NaturalLanguageParser:
         self.command_patterns = self._initialize_patterns()
         self.context_history = []
 
+    def parse_sequence(self, text: str) -> List[ParsedCommand]:
+        """Parse potentially chained commands separated by commas/then/and.
+
+        Example: "search for dog, click images, click the first image"
+        returns a list of ParsedCommand objects in order.
+        """
+        if not text or not isinstance(text, str):
+            return [self.parse("")]
+
+        # Normalize whitespace
+        cleaned = re.sub(r"\s+", " ", text).strip()
+
+        # Split on common chain separators while avoiding splitting inside quotes
+        # Simple heuristic: split on comma or the words 'and then', 'then', 'and'
+        # We keep order and drop empty segments
+        parts: List[str] = []
+        last = 0
+        in_single = False
+        in_double = False
+        i = 0
+        while i < len(cleaned):
+            ch = cleaned[i]
+            if ch == "'" and not in_double:
+                in_single = not in_single
+            elif ch == '"' and not in_single:
+                in_double = not in_double
+
+            if not in_single and not in_double:
+                # Comma separator
+                if ch == ',':
+                    segment = cleaned[last:i].strip()
+                    if segment:
+                        parts.append(segment)
+                    last = i + 1
+                else:
+                    # Word separators: ' and then ', ' then ', ' and '
+                    # Check only at word boundaries
+                    matched_sep = None
+                    for sep in [" and then ", " then ", " and "]:
+                        if cleaned.startswith(sep, i):
+                            matched_sep = sep
+                            break
+                    if matched_sep:
+                        segment = cleaned[last:i].strip()
+                        if segment:
+                            parts.append(segment)
+                        i += len(matched_sep) - 1
+                        last = i + 1
+            i += 1
+
+        # Append the final segment
+        tail = cleaned[last:].strip()
+        if tail:
+            parts.append(tail)
+
+        # Fallback to single parse if no separators found
+        if len(parts) <= 1:
+            return [self.parse(cleaned)]
+
+        commands: List[ParsedCommand] = []
+        for segment in parts:
+            # Try normal parse first
+            cmd = self.parse(segment)
+            if cmd.command_type == CommandType.UNKNOWN:
+                # Try to expand into a compound plan (e.g., calculator steps)
+                expanded = self._expand_compound(segment)
+                if expanded:
+                    commands.extend(expanded)
+                    continue
+            # Ensure raw_text reflects the segment
+            cmd.raw_text = segment.lower().strip()
+            commands.append(cmd)
+
+        return commands
+
+    def _expand_compound(self, text: str) -> List[ParsedCommand]:
+        """Expand a natural phrase into multiple concrete commands when possible.
+
+        Focus on simple calculation intents to drive Calculator via keyboard.
+        Examples understood:
+        - "calculate 1+2+3"
+        - "compute 7 * 8"
+        - "what is 12 / 3"
+        - "add 4 and 5 and 6"
+        - "subtract 3 from 10"
+        - "multiply 7 by 8"
+        - "divide 20 by 5"
+        Returns a list of keyboard commands to type the expression and press enter.
+        """
+        t = text.lower().strip()
+
+        def make_keyboard_sequence(expr: str) -> List[ParsedCommand]:
+            expr = expr.strip()
+            if not expr:
+                return []
+            return [
+                ParsedCommand(CommandType.KEYBOARD, ActionType.TYPE, {"text": expr}, 0.95, f"type {expr}"),
+                ParsedCommand(CommandType.KEYBOARD, ActionType.KEY_PRESS, {"key": "enter"}, 0.9, "press enter"),
+            ]
+
+        # calculate/compute/what is <expr>
+        m = re.search(r"^(?:calculate|compute|what\s+is)\s+([0-9\s+\-*/().]+)$", t)
+        if m:
+            expr = re.sub(r"\s+", " ", m.group(1)).strip()
+            return make_keyboard_sequence(expr)
+
+        # add <a> and <b> and <c> ...
+        m = re.search(r"^add\s+([0-9]+(?:\s*(?:and|,|\+|\splus\s)\s*[0-9]+)+)\s*$", t)
+        if m:
+            nums = re.split(r"\s*(?:and|,|\+|\splus\s)\s*", m.group(1))
+            nums = [n for n in nums if n]
+            if len(nums) >= 2:
+                expr = " + ".join(nums)
+                return make_keyboard_sequence(expr)
+
+        # subtract <a> from <b>
+        m = re.search(r"^subtract\s+([0-9]+)\s+from\s+([0-9]+)\s*$", t)
+        if m:
+            a, b = m.group(1), m.group(2)
+            return make_keyboard_sequence(f"{b} - {a}")
+
+        # multiply <a> by <b>
+        m = re.search(r"^multiply\s+([0-9]+)\s+by\s+([0-9]+)\s*$", t)
+        if m:
+            a, b = m.group(1), m.group(2)
+            return make_keyboard_sequence(f"{a} * {b}")
+
+        # divide <a> by <b>
+        m = re.search(r"^divide\s+([0-9]+)\s+by\s+([0-9]+)\s*$", t)
+        if m:
+            a, b = m.group(1), m.group(2)
+            return make_keyboard_sequence(f"{a} / {b}")
+
+        return []
+
     def _initialize_patterns(self) -> Dict[str, List[Tuple[str, CommandType, ActionType]]]:
         return {
             # Mouse patterns

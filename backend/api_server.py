@@ -3,7 +3,7 @@ import sys
 import os
 import asyncio
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from pydantic import BaseModel
 import uvicorn
 from fastapi import FastAPI, HTTPException, File, UploadFile
@@ -13,7 +13,7 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 try:
-    from core.parser import NaturalLanguageParser
+    from core.parser import NaturalLanguageParser, ParsedCommand, CommandType, ActionType
     from core.executor import CommandExecutor
     from core.logger import AxelaLogger
     from core.ai_agent import AIAgent
@@ -52,6 +52,16 @@ class ConfigResponse(BaseModel):
 class ConfigUpdateRequest(BaseModel):
     section: str
     settings: Dict[str, Any]
+
+
+class CommandBlock(BaseModel):
+    command_type: str
+    action: str
+    parameters: Dict[str, Any] = {}
+
+
+class CommandSequenceRequest(BaseModel):
+    commands: List[CommandBlock]
 
 
 class AxelaAPIServer:
@@ -171,29 +181,79 @@ class AxelaAPIServer:
                             message=message or f"Command failed: {request.command}"
                         )
 
-                # Manual mode - parse and execute directly
+                # Manual mode - parse and execute directly (supports chaining)
                 else:
-                    parsed_command = self.parser.parse(request.command)
+                    commands = self.parser.parse_sequence(request.command)
 
-                    if not self.config.is_command_allowed(
-                        parsed_command.command_type.value,
-                        parsed_command.action.value
-                    ):
+                    # If sequence produced a single command, keep legacy behavior
+                    if len(commands) == 1:
+                        parsed_command = commands[0]
+
+                        if not self.config.is_command_allowed(
+                            parsed_command.command_type.value,
+                            parsed_command.action.value
+                        ):
+                            return CommandResponse(
+                                success=False,
+                                message=f"Command not allowed by security policy: {request.command}"
+                            )
+
+                        result = self.executor.execute(parsed_command)
+                        self.parser.add_context(parsed_command)
+
+                        if result.success:
+                            self.successful_commands += 1
+
                         return CommandResponse(
-                            success=False,
-                            message=f"Command not allowed by security policy: {request.command}"
+                            success=result.success,
+                            message=result.message,
+                            data=result.data
                         )
 
-                    result = self.executor.execute(parsed_command)
-                    self.parser.add_context(parsed_command)
+                    # Sequence execution
+                    import time as _time
+                    messages = []
+                    total_success = True
+                    for idx, parsed_command in enumerate(commands, 1):
+                        if not self.config.is_command_allowed(
+                            parsed_command.command_type.value,
+                            parsed_command.action.value
+                        ):
+                            total_success = False
+                            messages.append(f"Step {idx} blocked: {parsed_command.command_type.value}/{parsed_command.action.value}")
+                            break
 
-                    if result.success:
+                        result = self.executor.execute(parsed_command)
+                        self.parser.add_context(parsed_command)
+                        messages.append(result.message)
+
+                        if not result.success:
+                            total_success = False
+                            break
+
+                        # context-aware delay between chained steps for UI stability
+                        if idx < len(commands):
+                            delay = 0.2
+                            try:
+                                if parsed_command.command_type == CommandType.PROGRAM and parsed_command.action == ActionType.START:
+                                    delay = 1.5
+                                elif parsed_command.command_type == CommandType.WEB and parsed_command.action in [ActionType.SEARCH, ActionType.NAVIGATE]:
+                                    delay = 1.0
+                                elif parsed_command.command_type == CommandType.SCREENSHOT:
+                                    delay = 0.3
+                                elif parsed_command.command_type == CommandType.MOUSE and parsed_command.action in [ActionType.CLICK, ActionType.DOUBLE_CLICK, ActionType.RIGHT_CLICK]:
+                                    delay = 0.4
+                            except Exception:
+                                delay = 0.2
+                            _time.sleep(delay)
+
+                    if total_success:
                         self.successful_commands += 1
 
                     return CommandResponse(
-                        success=result.success,
-                        message=result.message,
-                        data=result.data
+                        success=total_success,
+                        message="\n".join(messages) if messages else ("Command executed" if total_success else "Command failed"),
+                        data={"steps": len(commands)}
                     )
 
             except Exception as e:
@@ -202,6 +262,55 @@ class AxelaAPIServer:
                     success=False,
                     message=f"Error executing command: {str(e)}"
                 )
+
+        @app.post("/execute_sequence", response_model=CommandResponse)
+        async def execute_sequence(request: CommandSequenceRequest):
+            """Execute a sequence of command blocks provided as JSON."""
+            try:
+                if not request.commands:
+                    return CommandResponse(success=False, message="No commands provided")
+
+                total_success = True
+                messages = []
+
+                for idx, block in enumerate(request.commands, 1):
+                    try:
+                        cmd = ParsedCommand(
+                            command_type=CommandType(block.command_type.lower()),
+                            action=ActionType(block.action.lower()),
+                            parameters=block.parameters or {},
+                            confidence=1.0,
+                            raw_text=f"{block.command_type} {block.action}"
+                        )
+                    except Exception:
+                        total_success = False
+                        messages.append(f"Step {idx} invalid command: {block.command_type}/{block.action}")
+                        break
+
+                    if not self.config.is_command_allowed(cmd.command_type.value, cmd.action.value):
+                        total_success = False
+                        messages.append(f"Step {idx} blocked: {cmd.command_type.value}/{cmd.action.value}")
+                        break
+
+                    result = self.executor.execute(cmd)
+                    messages.append(result.message)
+                    if not result.success:
+                        total_success = False
+                        break
+
+                if total_success:
+                    self.successful_commands += 1
+                self.commands_executed += 1
+
+                return CommandResponse(
+                    success=total_success,
+                    message="\n".join(messages) if messages else ("Sequence executed" if total_success else "Sequence failed"),
+                    data={"steps": len(request.commands)}
+                )
+
+            except Exception as e:
+                self.logger.log_error(f"Error executing sequence: {e}")
+                return CommandResponse(success=False, message=str(e))
 
         @app.get("/config", response_model=ConfigResponse)
         async def get_config():
