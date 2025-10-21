@@ -1,0 +1,45 @@
+{
+  "scripts": [
+    {
+      "id": "script_20251020_223239_0",
+      "name": "bitcoin watcher",
+      "prompt": "go to https://coinmarketcap.com/currencies/bitcoin/; wait 0.5 seconds; take screenshot",
+      "description": "Watch bitcoin price periodically",
+      "commands": [
+        {
+          "id": "cmd_20251020_235837_702020",
+          "text": "go to https://coinmarketcap.com/currencies/bitcoin/",
+          "description": "web navigate",
+          "order": 0,
+          "is_enabled": true
+        },
+        {
+          "id": "cmd_20251020_235837_702020",
+          "text": "wait 0.5 seconds",
+          "description": "system sleep",
+          "order": 1,
+          "is_enabled": true
+        },
+        {
+          "id": "cmd_20251020_235837_702020",
+          "text": "take screenshot",
+          "description": "screenshot capture",
+          "order": 2,
+          "is_enabled": true
+        }
+      ],
+      "category": "Automation",
+      "is_active": true,
+      "is_favorite": false,
+      "is_recurring": true,
+      "recurring_interval": "15s",
+      "recurring_enabled": false,
+      "created_date": "2025-10-20T22:32:39.357080",
+      "updated_date": "2025-10-21T00:05:51.685791",
+      "usage_count": 102,
+      "last_executed": "2025-10-21T00:05:49.267350",
+      "next_execution": null
+    }
+  ],
+  "last_updated": "2025-10-21T00:05:51.685791"
+}

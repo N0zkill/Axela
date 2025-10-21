@@ -2,6 +2,8 @@
 import sys
 import os
 import argparse
+import signal
+import asyncio
 from pathlib import Path
 from typing import Optional
 
@@ -362,16 +364,45 @@ def main():
 
     args = parser.parse_args()
 
+    global_server = None
+
+    def cleanup_recurring_scripts():
+        try:
+            from scripts import script_manager
+            recurring_scripts = script_manager.get_recurring_scripts()
+            if recurring_scripts:
+                for script in recurring_scripts:
+                    script_manager.disable_recurring(script.id)
+                return True
+            else:
+                print("No recurring scripts to disable")
+                return False
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
+            return False
+
+    def signal_handler(signum, frame):
+        print(f"\nReceived signal {signum}, shutting down gracefully...")
+        cleanup_recurring_scripts()
+        sys.exit(0)
+
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     try:
         if args.api_mode:
             from api_server import AxelaAPIServer
             server = AxelaAPIServer(config_file=args.config)
+            global_server = server  # Store for cleanup
             server.start_server(args.host, args.port)
         else:
             app = AxelaApp(config_file=args.config)
+            global_server = app  # Store for cleanup
             app.run_cli()
     except KeyboardInterrupt:
         print("\nShutdown requested")
+        cleanup_recurring_scripts()
     except Exception as e:
         print(f"Fatal error: {e}")
         sys.exit(1)

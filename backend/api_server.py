@@ -2,6 +2,8 @@
 import sys
 import os
 import asyncio
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 from pydantic import BaseModel
@@ -20,6 +22,13 @@ try:
     from core.tts_service import get_tts_service, reinitialize_tts
     from util.config import Config
     from util.helpers import get_system_info
+    from scripts import script_manager, ScriptCategory, ScriptCommand, ScriptExecutor, scheduler
+    from commands.screenshot import ScreenshotCapture
+    import speech_recognition as sr
+    import tempfile
+    import sounddevice as sd
+    import os
+    import subprocess
 except ImportError as e:
     print(f"Import error: {e}")
     print("Make sure you're running from the backend directory.")
@@ -115,6 +124,25 @@ class AxelaAPIServer:
 
         self.logger.log_info("Axela API Server initialized")
 
+    async def _shutdown_handler(self):
+        try:
+            self.logger.log_info("Starting graceful shutdown...")
+
+            await scheduler.stop()
+            self.logger.log_info("Scheduler stopped")
+
+            recurring_scripts = script_manager.get_recurring_scripts()
+            if recurring_scripts:
+                self.logger.log_info(f"Disabling {len(recurring_scripts)} recurring scripts...")
+                for script in recurring_scripts:
+                    script_manager.disable_recurring(script.id)
+                    self.logger.log_info(f"Disabled recurring execution for script: {script.name}")
+
+            self.logger.log_info("Graceful shutdown completed")
+
+        except Exception as e:
+            self.logger.log_error(f"Error during shutdown: {e}")
+
     def _create_app(self) -> FastAPI:
         app = FastAPI(
             title="Axela API",
@@ -129,6 +157,14 @@ class AxelaAPIServer:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+        @app.on_event("startup")
+        async def startup_event():
+            await scheduler.start()
+
+        @app.on_event("shutdown")
+        async def shutdown_event():
+            await self._shutdown_handler()
 
         # API Routes
         @app.get("/")
@@ -211,7 +247,6 @@ class AxelaAPIServer:
                         )
 
                     # Sequence execution
-                    import time as _time
                     messages = []
                     total_success = True
                     for idx, parsed_command in enumerate(commands, 1):
@@ -245,7 +280,7 @@ class AxelaAPIServer:
                                     delay = 0.4
                             except Exception:
                                 delay = 0.2
-                            _time.sleep(delay)
+                            time.sleep(delay)
 
                     if total_success:
                         self.successful_commands += 1
@@ -431,7 +466,6 @@ class AxelaAPIServer:
         @app.post("/screenshot")
         async def take_screenshot():
             try:
-                from commands.screenshot import ScreenshotCapture
                 screenshot = ScreenshotCapture()
                 screenshot_path = screenshot.capture()
 
@@ -541,21 +575,20 @@ class AxelaAPIServer:
             try:
                 devices = []
                 try:
-                    import sounddevice as sd
                     device_list = sd.query_devices()
-                    
+
                     # Get the default input device
                     try:
                         default_device = sd.query_devices(kind='input')
                         default_name = default_device['name'] if default_device else None
                     except:
                         default_name = None
-                    
+
                     for i, device in enumerate(device_list):
                         # Only include input devices that are available
                         if device['max_input_channels'] > 0:
                             device_name = device['name']
-                            
+
                             # Filter out common virtual/internal devices
                             skip_keywords = [
                                 'Microsoft Sound Mapper',
@@ -566,28 +599,28 @@ class AxelaAPIServer:
                                 'Stereo Mix',
                                 'What U Hear'
                             ]
-                            
+
                             # Skip devices with filter keywords (case insensitive)
                             if any(keyword.lower() in device_name.lower() for keyword in skip_keywords):
                                 continue
-                            
+
                             # Only include MME devices on Windows (filters out DirectSound duplicates)
                             hostapi_name = sd.query_hostapis(device['hostapi'])['name']
                             if hostapi_name != 'MME':
                                 continue
-                            
+
                             devices.append({
                                 "id": str(i),
                                 "name": device_name,
                                 "channels": device['max_input_channels'],
                                 "is_default": device_name == default_name
                             })
-                            
+
                 except ImportError:
                     self.logger.log_warning("sounddevice not installed, audio device listing unavailable")
                 except Exception as e:
                     self.logger.log_error(f"Error querying audio devices: {e}")
-                
+
                 return {
                     "success": True,
                     "devices": devices
@@ -602,13 +635,7 @@ class AxelaAPIServer:
 
         @app.post("/transcribe")
         async def transcribe_audio(audio: UploadFile = File(...)):
-            """Transcribe audio to text using speech recognition."""
             try:
-                import speech_recognition as sr
-                import tempfile
-                import os
-                import subprocess
-                
                 # Find FFmpeg
                 ffmpeg_exe = None
                 ffmpeg_paths = [
@@ -618,26 +645,26 @@ class AxelaAPIServer:
                     r"C:\ProgramData\chocolatey\bin\ffmpeg.exe",
                     os.path.expandvars(r"%USERPROFILE%\scoop\apps\ffmpeg\current\bin\ffmpeg.exe"),
                 ]
-                
+
                 for path in ffmpeg_paths:
                     if os.path.exists(path):
                         ffmpeg_exe = path
                         self.logger.log_info(f"Using FFmpeg at: {path}")
                         break
-                
+
                 if not ffmpeg_exe:
                     # Try using ffmpeg from PATH
                     ffmpeg_exe = "ffmpeg"
-                
+
                 # Save uploaded file temporarily
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_input:
                     content = await audio.read()
                     temp_input.write(content)
                     temp_input_path = temp_input.name
-                
+
                 # Convert to WAV format using ffmpeg directly
                 temp_wav_path = temp_input_path.replace('.webm', '.wav')
-                
+
                 try:
                     # Convert using ffmpeg subprocess
                     result = subprocess.run(
@@ -646,7 +673,7 @@ class AxelaAPIServer:
                         text=True,
                         timeout=10
                     )
-                    
+
                     if result.returncode != 0:
                         self.logger.log_error(f"FFmpeg error: {result.stderr}")
                         return {
@@ -654,24 +681,24 @@ class AxelaAPIServer:
                             "message": "Audio conversion failed",
                             "text": ""
                         }
-                    
+
                     # Initialize recognizer
                     recognizer = sr.Recognizer()
-                    
+
                     # Load audio file
                     with sr.AudioFile(temp_wav_path) as source:
                         audio_data = recognizer.record(source)
-                    
+
                     # Transcribe using Google Speech Recognition
                     text = recognizer.recognize_google(audio_data)
-                    
+
                     self.logger.log_info(f"Transcribed: {text}")
-                    
+
                     return {
                         "success": True,
                         "text": text
                     }
-                    
+
                 except sr.UnknownValueError:
                     return {
                         "success": False,
@@ -694,7 +721,7 @@ class AxelaAPIServer:
                         os.unlink(temp_wav_path)
                     except:
                         pass
-                        
+
             except Exception as e:
                 self.logger.log_error(f"Error transcribing audio: {e}")
                 import traceback
@@ -704,6 +731,633 @@ class AxelaAPIServer:
                     "message": str(e),
                     "text": ""
                 }
+
+        @app.get("/scripts")
+        async def list_scripts(sort_by: str = "-created_date"):
+            try:
+                scripts = script_manager.list_scripts(sort_by)
+                return {
+                    "success": True,
+                    "scripts": [script.to_dict() for script in scripts]
+                }
+            except Exception as e:
+                self.logger.log_error(f"Error listing scripts: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/scripts/categories")
+        async def get_script_categories():
+            try:
+
+                categories = [{"value": cat.value, "label": cat.value} for cat in ScriptCategory]
+
+                return {
+                    "success": True,
+                    "categories": categories
+                }
+            except Exception as e:
+                self.logger.log_error(f"Error getting script categories: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/scripts/command-types")
+        async def get_command_types():
+            try:
+                command_types = {
+                    "mouse": {
+                        "id": "mouse",
+                        "name": "Mouse",
+                        "description": "Mouse actions like clicking, scrolling, etc.",
+                        "icon": "🖱️",
+                        "actions": {
+                            "click": {
+                                "id": "click",
+                                "name": "Click",
+                                "description": "Click at a specific location",
+                                "parameters": {
+                                    "x": {"type": "number", "label": "X Position", "required": True, "min": 0},
+                                    "y": {"type": "number", "label": "Y Position", "required": True, "min": 0},
+                                    "button": {"type": "select", "label": "Button", "options": ["left", "right", "middle"], "default": "left"}
+                                }
+                            },
+                            "double_click": {
+                                "id": "double_click",
+                                "name": "Double Click",
+                                "description": "Double click at a specific location",
+                                "parameters": {
+                                    "x": {"type": "number", "label": "X Position", "required": True, "min": 0},
+                                    "y": {"type": "number", "label": "Y Position", "required": True, "min": 0},
+                                    "button": {"type": "select", "label": "Button", "options": ["left", "right", "middle"], "default": "left"}
+                                }
+                            },
+                            "right_click": {
+                                "id": "right_click",
+                                "name": "Right Click",
+                                "description": "Right click at a specific location",
+                                "parameters": {
+                                    "x": {"type": "number", "label": "X Position", "required": True, "min": 0},
+                                    "y": {"type": "number", "label": "Y Position", "required": True, "min": 0}
+                                }
+                            },
+                            "scroll": {
+                                "id": "scroll",
+                                "name": "Scroll",
+                                "description": "Scroll up or down",
+                                "parameters": {
+                                    "direction": {"type": "select", "label": "Direction", "options": ["up", "down"], "required": True},
+                                    "amount": {"type": "number", "label": "Amount", "required": True, "min": 1, "max": 10, "default": 3}
+                                }
+                            },
+                            "drag": {
+                                "id": "drag",
+                                "name": "Drag",
+                                "description": "Drag from one point to another",
+                                "parameters": {
+                                    "start_x": {"type": "number", "label": "Start X", "required": True, "min": 0},
+                                    "start_y": {"type": "number", "label": "Start Y", "required": True, "min": 0},
+                                    "end_x": {"type": "number", "label": "End X", "required": True, "min": 0},
+                                    "end_y": {"type": "number", "label": "End Y", "required": True, "min": 0},
+                                    "duration": {"type": "number", "label": "Duration (seconds)", "min": 0.1, "max": 5, "default": 1}
+                                }
+                            }
+                        }
+                    },
+                    "keyboard": {
+                        "id": "keyboard",
+                        "name": "Keyboard",
+                        "description": "Keyboard actions like typing, key combinations",
+                        "icon": "⌨️",
+                        "actions": {
+                            "type": {
+                                "id": "type",
+                                "name": "Type Text",
+                                "description": "Type text at the current cursor position",
+                                "parameters": {
+                                    "text": {"type": "text", "label": "Text to Type", "required": True, "multiline": True}
+                                }
+                            },
+                            "press_key": {
+                                "id": "press_key",
+                                "name": "Press Key",
+                                "description": "Press a single key or key combination",
+                                "parameters": {
+                                    "key": {"type": "select", "label": "Key", "options": [
+                                        "enter", "space", "tab", "escape", "backspace", "delete",
+                                        "ctrl+c", "ctrl+v", "ctrl+a", "ctrl+z", "ctrl+s", "ctrl+n",
+                                        "alt+tab", "alt+f4", "win+d", "win+r", "win+l"
+                                    ], "required": True}
+                                }
+                            },
+                            "hotkey": {
+                                "id": "hotkey",
+                                "name": "Custom Hotkey",
+                                "description": "Press a custom key combination",
+                                "parameters": {
+                                    "keys": {"type": "text", "label": "Key Combination (e.g., ctrl+shift+a)", "required": True}
+                                }
+                            }
+                        }
+                    },
+                    "screenshot": {
+                        "id": "screenshot",
+                        "name": "Screenshot",
+                        "description": "Take screenshots of the screen",
+                        "icon": "📸",
+                        "actions": {
+                            "capture": {
+                                "id": "capture",
+                                "name": "Take Screenshot",
+                                "description": "Capture a screenshot of the entire screen",
+                                "parameters": {
+                                    "filename": {"type": "text", "label": "Filename (optional)", "placeholder": "screenshot.png"}
+                                }
+                            },
+                            "capture_region": {
+                                "id": "capture_region",
+                                "name": "Capture Region",
+                                "description": "Capture a specific region of the screen",
+                                "parameters": {
+                                    "x": {"type": "number", "label": "X Position", "required": True, "min": 0},
+                                    "y": {"type": "number", "label": "Y Position", "required": True, "min": 0},
+                                    "width": {"type": "number", "label": "Width", "required": True, "min": 1},
+                                    "height": {"type": "number", "label": "Height", "required": True, "min": 1},
+                                    "filename": {"type": "text", "label": "Filename (optional)", "placeholder": "region.png"}
+                                }
+                            }
+                        }
+                    },
+                    "system": {
+                        "id": "system",
+                        "name": "System",
+                        "description": "System-level actions",
+                        "icon": "⚙️",
+                        "actions": {
+                            "sleep": {
+                                "id": "sleep",
+                                "name": "Sleep",
+                                "description": "Wait for a specified amount of time",
+                                "parameters": {
+                                    "duration": {"type": "number", "label": "Duration (seconds)", "required": True, "min": 0.1, "max": 60, "default": 1}
+                                }
+                            },
+                            "shutdown": {
+                                "id": "shutdown",
+                                "name": "Shutdown",
+                                "description": "Shutdown the computer",
+                                "parameters": {
+                                    "delay": {"type": "number", "label": "Delay (seconds)", "min": 0, "max": 300, "default": 0}
+                                }
+                            },
+                            "restart": {
+                                "id": "restart",
+                                "name": "Restart",
+                                "description": "Restart the computer",
+                                "parameters": {
+                                    "delay": {"type": "number", "label": "Delay (seconds)", "min": 0, "max": 300, "default": 0}
+                                }
+                            }
+                        }
+                    },
+                    "program": {
+                        "id": "program",
+                        "name": "Program",
+                        "description": "Program and application control",
+                        "icon": "💻",
+                        "actions": {
+                            "start": {
+                                "id": "start",
+                                "name": "Start Program",
+                                "description": "Launch a program or application",
+                                "parameters": {
+                                    "program": {"type": "text", "label": "Program Name/Path", "required": True, "placeholder": "notepad.exe"}
+                                }
+                            },
+                            "close": {
+                                "id": "close",
+                                "name": "Close Program",
+                                "description": "Close a running program",
+                                "parameters": {
+                                    "program": {"type": "text", "label": "Program Name", "required": True, "placeholder": "notepad"}
+                                }
+                            }
+                        }
+                    },
+                    "web": {
+                        "id": "web",
+                        "name": "Web",
+                        "description": "Web browser actions",
+                        "icon": "🌐",
+                        "actions": {
+                            "navigate": {
+                                "id": "navigate",
+                                "name": "Navigate to URL",
+                                "description": "Open a URL in the default browser",
+                                "parameters": {
+                                    "url": {"type": "text", "label": "URL", "required": True, "placeholder": "https://example.com"}
+                                }
+                            },
+                            "search": {
+                                "id": "search",
+                                "name": "Search",
+                                "description": "Search for something on the web",
+                                "parameters": {
+                                    "query": {"type": "text", "label": "Search Query", "required": True, "placeholder": "python tutorial"}
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return {
+                    "success": True,
+                    "command_types": command_types
+                }
+            except Exception as e:
+                self.logger.log_error(f"Error getting command types: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/scripts/search")
+        async def search_scripts(q: str):
+            try:
+
+                if not q.strip():
+                    raise HTTPException(status_code=400, detail="Search query is required")
+
+                scripts = script_manager.search_scripts(q)
+
+                return {
+                    "success": True,
+                    "scripts": [script.to_dict() for script in scripts],
+                    "query": q
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                self.logger.log_error(f"Error searching scripts: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/scripts/{script_id}")
+        async def get_script(script_id: str):
+            try:
+                script = script_manager.get_script(script_id)
+                if not script:
+                    raise HTTPException(status_code=404, detail="Script not found")
+
+                return {
+                    "success": True,
+                    "script": script.to_dict()
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                self.logger.log_error(f"Error getting script: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/scripts")
+        async def create_script(request: Dict[str, Any]):
+            try:
+                name = request.get("name", "").strip()
+                prompt = request.get("prompt", "").strip()
+                description = request.get("description", "").strip()
+                category_str = request.get("category", "General")
+                commands_data = request.get("commands", [])
+
+                self.logger.log_info(f"Creating script '{name}' with {len(commands_data)} commands")
+
+                if not name or not prompt:
+                    raise HTTPException(status_code=400, detail="Name and prompt are required")
+
+                try:
+                    category = ScriptCategory(category_str)
+                except ValueError:
+                    category = ScriptCategory.GENERAL
+
+                # Handle recurring settings
+                is_recurring = request.get("is_recurring", False)
+                recurring_interval = request.get("recurring_interval")
+                recurring_enabled = False
+
+                script = script_manager.create_script(
+                    name, prompt, description, category,
+                    is_recurring=is_recurring,
+                    recurring_interval=recurring_interval,
+                    recurring_enabled=recurring_enabled
+                )
+
+                if commands_data:
+                    self.logger.log_info(f"Adding {len(commands_data)} commands to script {script.id}")
+                    for cmd_data in commands_data:
+                        script_manager.add_command_to_script(
+                            script.id,
+                            cmd_data.get("text", ""),
+                            cmd_data.get("description", "")
+                        )
+
+                return {
+                    "success": True,
+                    "script": script.to_dict(),
+                    "message": "Script created successfully"
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                self.logger.log_error(f"Error creating script: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.put("/scripts/{script_id}")
+        async def update_script(script_id: str, request: Dict[str, Any]):
+            try:
+                script = script_manager.get_script(script_id)
+                if not script:
+                    raise HTTPException(status_code=404, detail="Script not found")
+
+                # Prepare update data
+                update_data = {}
+                if "name" in request:
+                    update_data["name"] = request["name"].strip()
+                if "prompt" in request:
+                    update_data["prompt"] = request["prompt"].strip()
+                if "description" in request:
+                    update_data["description"] = request["description"].strip()
+                if "category" in request:
+                    try:
+                        update_data["category"] = ScriptCategory(request["category"])
+                    except ValueError:
+                        update_data["category"] = ScriptCategory.GENERAL
+                if "is_active" in request:
+                    update_data["is_active"] = bool(request["is_active"])
+                if "is_favorite" in request:
+                    update_data["is_favorite"] = bool(request["is_favorite"])
+
+                updated_script = script_manager.update_script(script_id, **update_data)
+
+                # Handle recurring settings
+                is_recurring = request.get("is_recurring", False)
+                recurring_interval = request.get("recurring_interval")
+
+                if is_recurring and recurring_interval:
+                    updated_script.is_recurring = True
+                    updated_script.recurring_interval = recurring_interval
+                    updated_script.recurring_enabled = False
+                    updated_script.next_execution = None
+                else:
+                    updated_script.is_recurring = False
+                    updated_script.recurring_enabled = False
+                    updated_script.recurring_interval = None
+                    updated_script.next_execution = None
+
+                script_manager._save_scripts()
+
+                if "commands" in request:
+                    commands_data = request.get("commands", [])
+                    self.logger.log_info(f"Updating script {script_id} with {len(commands_data)} commands")
+
+                    new_commands = []
+                    for i, cmd_data in enumerate(commands_data):
+                        command_id = f"cmd_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+                        command = ScriptCommand(
+                            id=command_id,
+                            text=cmd_data.get("text", ""),
+                            description=cmd_data.get("description", ""),
+                            order=i
+                        )
+                        new_commands.append(command)
+
+                    updated_script.commands = new_commands
+                    updated_script.updated_date = datetime.now().isoformat()
+
+                    script_manager._save_scripts()
+
+                    self.logger.log_info(f"Updated script with {len(updated_script.commands)} commands")
+
+                return {
+                    "success": True,
+                    "script": updated_script.to_dict(),
+                    "message": "Script updated successfully"
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                self.logger.log_error(f"Error updating script: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.delete("/scripts/{script_id}")
+        async def delete_script(script_id: str):
+            try:
+                success = script_manager.delete_script(script_id)
+                if not success:
+                    raise HTTPException(status_code=404, detail="Script not found")
+
+                return {
+                    "success": True,
+                    "message": "Script deleted successfully"
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                self.logger.log_error(f"Error deleting script: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/scripts/{script_id}/execute")
+        async def execute_script(script_id: str, request: Dict[str, Any] = None):
+            try:
+                script = script_manager.get_script(script_id)
+                if not script:
+                    raise HTTPException(status_code=404, detail="Script not found")
+
+                script_executor = ScriptExecutor(self.logger, self.executor)
+
+                result = await script_executor.execute_script_object(script)
+
+                return {
+                    "success": result.success,
+                    "script_id": result.script_id,
+                    "script_name": result.script_name,
+                    "total_commands": result.total_commands,
+                    "executed_commands": result.executed_commands,
+                    "failed_commands": result.failed_commands,
+                    "execution_time": result.execution_time,
+                    "results": result.results,
+                    "message": f"Script executed: {result.executed_commands}/{result.total_commands} commands successful"
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                self.logger.log_error(f"Error executing script: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/scripts/{script_id}/commands")
+        async def add_command_to_script(script_id: str, request: Dict[str, Any]):
+            try:
+
+                command_text = request.get("text", "").strip()
+                description = request.get("description", "").strip()
+
+                if not command_text:
+                    raise HTTPException(status_code=400, detail="Command text is required")
+
+                success = script_manager.add_command_to_script(script_id, command_text, description)
+                if not success:
+                    raise HTTPException(status_code=404, detail="Script not found")
+
+                script = script_manager.get_script(script_id)
+                return {
+                    "success": True,
+                    "script": script.to_dict(),
+                    "message": "Command added successfully"
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                self.logger.log_error(f"Error adding command to script: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.delete("/scripts/{script_id}/commands/{command_id}")
+        async def remove_command_from_script(script_id: str, command_id: str):
+            try:
+
+                success = script_manager.remove_command_from_script(script_id, command_id)
+                if not success:
+                    raise HTTPException(status_code=404, detail="Script or command not found")
+
+                # Return updated script
+                script = script_manager.get_script(script_id)
+                return {
+                    "success": True,
+                    "script": script.to_dict(),
+                    "message": "Command removed successfully"
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                self.logger.log_error(f"Error removing command from script: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/scripts/search")
+        async def search_scripts(q: str):
+            try:
+
+                if not q.strip():
+                    raise HTTPException(status_code=400, detail="Search query is required")
+
+                scripts = script_manager.search_scripts(q)
+
+                return {
+                    "success": True,
+                    "scripts": [script.to_dict() for script in scripts],
+                    "query": q
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                self.logger.log_error(f"Error searching scripts: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/scripts/{script_id}/recurring/enable")
+        async def enable_recurring_script(script_id: str, request: Dict[str, Any]):
+            try:
+                interval = request.get("interval", "").strip()
+                if not interval:
+                    raise HTTPException(status_code=400, detail="Interval is required")
+
+                success = script_manager.enable_recurring(script_id, interval)
+                if not success:
+                    raise HTTPException(status_code=404, detail="Script not found")
+
+                script = script_manager.get_script(script_id)
+                self.logger.log_info(f"Enabled recurring for script {script_id} with interval {interval}")
+
+                return {
+                    "success": True,
+                    "script": script.to_dict(),
+                    "message": f"Recurring execution enabled with interval: {interval}"
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                self.logger.log_error(f"Error enabling recurring script: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/scripts/{script_id}/recurring/disable")
+        async def disable_recurring_script(script_id: str):
+            try:
+                success = script_manager.disable_recurring(script_id)
+                if not success:
+                    raise HTTPException(status_code=404, detail="Script not found")
+
+                script = script_manager.get_script(script_id)
+                self.logger.log_info(f"Disabled recurring for script {script_id}")
+
+                return {
+                    "success": True,
+                    "script": script.to_dict(),
+                    "message": "Recurring execution disabled"
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                self.logger.log_error(f"Error disabling recurring script: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/scripts/recurring")
+        async def get_recurring_scripts():
+            try:
+                recurring_scripts = script_manager.get_recurring_scripts()
+                return {
+                    "success": True,
+                    "scripts": [script.to_dict() for script in recurring_scripts],
+                    "count": len(recurring_scripts)
+                }
+            except Exception as e:
+                self.logger.log_error(f"Error getting recurring scripts: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/scripts/recurring/due")
+        async def get_due_scripts():
+            try:
+                due_scripts = script_manager.get_scripts_due_for_execution()
+                return {
+                    "success": True,
+                    "scripts": [script.to_dict() for script in due_scripts],
+                    "count": len(due_scripts)
+                }
+            except Exception as e:
+                self.logger.log_error(f"Error getting due scripts: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/scheduler/status")
+        async def get_scheduler_status():
+            try:
+                status = scheduler.get_status()
+                return {
+                    "success": True,
+                    "status": status
+                }
+            except Exception as e:
+                self.logger.log_error(f"Error getting scheduler status: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/scheduler/start")
+        async def start_scheduler():
+            try:
+                await scheduler.start()
+                return {
+                    "success": True,
+                    "message": "Scheduler started"
+                }
+            except Exception as e:
+                self.logger.log_error(f"Error starting scheduler: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/scheduler/stop")
+        async def stop_scheduler():
+            try:
+                await scheduler.stop()
+                return {
+                    "success": True,
+                    "message": "Scheduler stopped"
+                }
+            except Exception as e:
+                self.logger.log_error(f"Error stopping scheduler: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
 
         return app
 
@@ -721,10 +1375,8 @@ class AxelaAPIServer:
             if not ai_response.success:
                 return False, ai_response.explanation
 
-            # Debug: Log what the AI generated
+            # Log AI command generation for analytics
             self.logger.log_info(f"AI generated {len(ai_response.commands)} commands")
-            for i, cmd in enumerate(ai_response.commands):
-                self.logger.log_info(f"Command {i+1}: type={cmd.command_type.value}, action={cmd.action.value}, params={cmd.parameters}")
 
             total_success = True
             messages = []

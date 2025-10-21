@@ -194,6 +194,11 @@ export class Script {
     this.usage_count = data.usage_count || data.executionCount || 0;
     this.executionCount = data.executionCount || data.usage_count || 0;
     this.lastExecuted = data.lastExecuted || null;
+
+    this.is_recurring = data.is_recurring || false;
+    this.recurring_interval = data.recurring_interval || null;
+    this.recurring_enabled = data.recurring_enabled || false;
+    this.next_execution = data.next_execution || null;
   }
 
   addCommand(command) {
@@ -253,33 +258,239 @@ export class Script {
   }
 
   static async list(sortBy = '-created_date') {
-    return [...scriptsStore].sort((a, b) => {
-      if (sortBy.startsWith('-')) {
-        return new Date(b.created_date) - new Date(a.created_date);
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/scripts?sort_by=${sortBy}`, {
+        cache: 'no-store'
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
-      return new Date(a.created_date) - new Date(b.created_date);
-    });
+      const result = await response.json();
+      if (result.success) {
+        return result.scripts.map(scriptData => new Script(scriptData));
+      } else {
+        throw new Error(result.message || 'Failed to fetch scripts');
+      }
+    } catch (error) {
+      console.error('Error fetching scripts:', error);
+      return [];
+    }
   }
 
   static async create(data) {
-    const newScript = new Script(data);
-    scriptsStore.unshift(newScript);
-    return newScript;
+    try {
+      const response = await fetch('http://127.0.0.1:8000/scripts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: data.name,
+          prompt: data.prompt,
+          description: data.description || '',
+          category: data.category || 'General',
+          is_recurring: data.is_recurring || false,
+          recurring_interval: data.recurring_interval || null,
+          recurring_enabled: data.recurring_enabled || false,
+          commands: data.commands || []
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      if (result.success) {
+        return new Script(result.script);
+      } else {
+        throw new Error(result.message || 'Failed to create script');
+      }
+    } catch (error) {
+      console.error('Error creating script:', error);
+      throw error;
+    }
   }
 
   static async update(id, data) {
-    const index = scriptsStore.findIndex(s => s.id === id);
-    if (index !== -1) {
-      Object.assign(scriptsStore[index], data);
-      scriptsStore[index].updated_date = new Date().toISOString();
-      return scriptsStore[index];
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/scripts/${id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data)
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      if (result.success) {
+        return new Script(result.script);
+      } else {
+        throw new Error(result.message || 'Failed to update script');
+      }
+    } catch (error) {
+      console.error('Error updating script:', error);
+      throw error;
     }
-    return null;
   }
 
   static async delete(id) {
-    scriptsStore = scriptsStore.filter(s => s.id !== id);
-    return true;
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/scripts/${id}`, {
+        method: 'DELETE'
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      return result.success;
+    } catch (error) {
+      console.error('Error deleting script:', error);
+      throw error;
+    }
+  }
+
+  static async execute(id, mode = 'ai') {
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/scripts/${id}/execute`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ mode })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      return result;
+    } catch (error) {
+      console.error('Error executing script:', error);
+      throw error;
+    }
+  }
+
+  static async search(query) {
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/scripts/search?q=${encodeURIComponent(query)}`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const result = await response.json();
+      if (result.success) {
+        return result.scripts.map(scriptData => new Script(scriptData));
+      } else {
+        throw new Error(result.message || 'Failed to search scripts');
+      }
+    } catch (error) {
+      console.error('Error searching scripts:', error);
+      return [];
+    }
+  }
+
+  static async getCategories() {
+    try {
+      const response = await fetch('http://127.0.0.1:8000/scripts/categories');
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const result = await response.json();
+      if (result.success) {
+        return result.categories;
+      } else {
+        throw new Error(result.message || 'Failed to get categories');
+      }
+    } catch (error) {
+      console.error('Error getting categories:', error);
+      return [];
+    }
+  }
+
+  static async enableRecurring(id, interval) {
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/scripts/${id}/recurring/enable`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ interval })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      if (result.success) {
+        return new Script(result.script);
+      } else {
+        throw new Error(result.message || 'Failed to enable recurring');
+      }
+    } catch (error) {
+      console.error('Error enabling recurring:', error);
+      throw error;
+    }
+  }
+
+  static async disableRecurring(id) {
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/scripts/${id}/recurring/disable`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      if (result.success) {
+        return new Script(result.script);
+      } else {
+        throw new Error(result.message || 'Failed to disable recurring');
+      }
+    } catch (error) {
+      console.error('Error disabling recurring:', error);
+      throw error;
+    }
+  }
+
+  static async getRecurringScripts() {
+    try {
+      const response = await fetch('http://127.0.0.1:8000/scripts/recurring');
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const result = await response.json();
+      return result.scripts.map(script => new Script(script));
+    } catch (error) {
+      console.error('Error getting recurring scripts:', error);
+      return [];
+    }
+  }
+
+  static async getDueScripts() {
+    try {
+      const response = await fetch('http://127.0.0.1:8000/scripts/recurring/due');
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const result = await response.json();
+      return result.scripts.map(script => new Script(script));
+    } catch (error) {
+      console.error('Error getting due scripts:', error);
+      return [];
+    }
   }
 
   toJSON() {
