@@ -172,10 +172,12 @@ class TTSService:
         import os
         api_key = os.getenv('OPENAI_API_KEY')
         if not api_key:
-            # Try loading from .env file
+            # Try loading from .env file in project root
             try:
                 from dotenv import load_dotenv
-                load_dotenv()
+                from pathlib import Path
+                env_path = Path(__file__).parent.parent.parent / '.env'
+                load_dotenv(env_path)
                 api_key = os.getenv('OPENAI_API_KEY')
             except:
                 pass

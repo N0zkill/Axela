@@ -7,6 +7,17 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
+# Load environment variables FIRST, before any other imports
+try:
+    from dotenv import load_dotenv
+    env_path = Path(__file__).parent.parent / '.env'
+    load_dotenv(env_path)
+    print(f"[OK] Loaded environment from: {env_path}")
+except ImportError:
+    print("[WARNING] python-dotenv not installed")
+except Exception as e:
+    print(f"[WARNING] Error loading .env: {e}")
+
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 

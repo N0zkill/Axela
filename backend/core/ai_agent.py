@@ -15,7 +15,8 @@ except ImportError:
 
 try:
     from dotenv import load_dotenv
-    env_path = Path(__file__).parent.parent / '.env'
+    # Load from project root (one level up from backend/)
+    env_path = Path(__file__).parent.parent.parent / '.env'
     load_dotenv(env_path)
     DOTENV_AVAILABLE = True
 except ImportError:
