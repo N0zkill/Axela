@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
@@ -7,67 +7,96 @@ import './SignIn.css';
 export default function SignIn() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { signIn } = useAuth();
+  const { signIn, signInWithGoogle, signInWithGithub, isAuthenticated, isLoading: authLoading } = useAuth();
+
+  useEffect(() => {
+    if (!authLoading && isAuthenticated) {
+      navigate('/', { replace: true });
+    }
+  }, [authLoading, isAuthenticated, navigate]);
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-stone-950">
+        <div className="flex items-center space-x-2">
+          <div className="w-6 h-6 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+          <span className="text-white">Preparing your workspace...</span>
+        </div>
+      </div>
+    );
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setIsLoading(true);
+    setIsSubmitting(true);
     setError('');
 
     // Basic validation
     if (!email || !password) {
       setError('Please enter both email and password.');
-      setIsLoading(false);
+      setIsSubmitting(false);
       return;
     }
 
     if (!email.includes('@')) {
       setError('Please enter a valid email address');
-      setIsLoading(false);
+      setIsSubmitting(false);
       return;
     }
 
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // For demo purposes, accept any email/password combination
-      // In a real app, you would validate against your backend
-      if (email && password) {
-        toast({
-          title: "Welcome back!",
-          description: `Welcome, ${email}!`,
-        });
-        
-        // Use the auth context to sign in
-        signIn(email);
-        
-        navigate('/assistant');
-      }
+      // Use Supabase authentication
+      await signIn(email, password);
+
+      toast({
+        title: "Welcome back!",
+        description: `Welcome, ${email}!`,
+      });
+
+      navigate('/');
     } catch (err) {
-      setError('Invalid email or password. Please try again.');
+      console.error('Sign in error:', err);
+      setError(err.message || 'Invalid email or password. Please try again.');
     } finally {
-      setIsLoading(false);
+      setIsSubmitting(false);
     }
   };
 
-  // Temporary social login handlers
-  const handleGoogleLogin = () => {
-    toast({
-      title: "Google Login",
-      description: "Google login coming soon!",
-    });
+  // Social login handlers
+  const handleGoogleLogin = async () => {
+    try {
+      setIsSubmitting(true);
+      await signInWithGoogle();
+    } catch (err) {
+      console.error('Google login error:', err);
+      toast({
+        title: "Google Login Error",
+        description: err.message || "Failed to sign in with Google",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleGithubLogin = () => {
-    toast({
-      title: "GitHub Login", 
-      description: "GitHub login coming soon!",
-    });
+  const handleGithubLogin = async () => {
+    try {
+      setIsSubmitting(true);
+      await signInWithGithub();
+    } catch (err) {
+      console.error('GitHub login error:', err);
+      toast({
+        title: "GitHub Login Error",
+        description: err.message || "Failed to sign in with GitHub",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleSignUp = () => {
@@ -110,7 +139,7 @@ export default function SignIn() {
                 placeholder="you@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                disabled={isLoading}
+                disabled={isSubmitting}
               />
             </div>
 
@@ -121,12 +150,12 @@ export default function SignIn() {
                 placeholder="Enter password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                disabled={isLoading}
+                disabled={isSubmitting}
               />
             </div>
 
-            <button type="submit" disabled={isLoading}>
-              {isLoading ? 'Signing in...' : 'Login'}
+            <button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? 'Signing in...' : 'Login'}
             </button>
           </form>
 
@@ -141,7 +170,7 @@ export default function SignIn() {
           </div>
 
           <div className="social-login">
-            <button className="google-btn" onClick={handleGoogleLogin} disabled={isLoading}>
+            <button className="google-btn" onClick={handleGoogleLogin} disabled={isSubmitting}>
               <img
                 src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/google/google-original.svg"
                 alt="Google"
@@ -149,7 +178,7 @@ export default function SignIn() {
               Sign in with Google
             </button>
 
-            <button className="github-btn" onClick={handleGithubLogin} disabled={isLoading}>
+            <button className="github-btn" onClick={handleGithubLogin} disabled={isSubmitting}>
               <img
                 src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/github/github-original.svg"
                 alt="GitHub"

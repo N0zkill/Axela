@@ -12,7 +12,7 @@ export default function SignUp() {
   const [error, setError] = useState('');
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { signIn } = useAuth();
+  const { signUp } = useAuth();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -45,42 +45,29 @@ export default function SignUp() {
     }
 
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Use Supabase to create account
+      const { user } = await signUp(email, password);
       
-      // For demo purposes, accept any email/password combination
-      // In a real app, you would create the account on your backend
-      if (email && password) {
-        toast({
-          title: "Account created!",
-          description: `Welcome to Axela, ${email}!`,
-        });
-        
-        // Use the auth context to sign in
-        signIn(email);
-        
-        navigate('/assistant');
+      toast({
+        title: "Account created!",
+        description: user?.email_confirmed_at 
+          ? `Welcome to Axela, ${email}!` 
+          : `Account created! Please check your email to confirm your account.`,
+      });
+      
+      // If email confirmation is required, redirect to signin
+      // If auto-confirmed, user will be automatically signed in
+      if (!user?.email_confirmed_at) {
+        navigate('/signin');
+      } else {
+        navigate('/');
       }
     } catch (err) {
-      setError('Failed to create account. Please try again.');
+      console.error('Sign up error:', err);
+      setError(err.message || 'Failed to create account. Please try again.');
     } finally {
       setIsLoading(false);
     }
-  };
-
-  // Temporary social login handlers
-  const handleGoogleSignUp = () => {
-    toast({
-      title: "Google Sign Up",
-      description: "Google sign up coming soon!",
-    });
-  };
-
-  const handleGithubSignUp = () => {
-    toast({
-      title: "GitHub Sign Up", 
-      description: "GitHub sign up coming soon!",
-    });
   };
 
   const handleSignIn = () => {
@@ -161,28 +148,6 @@ export default function SignUp() {
                 Sign In
               </a>
             </p>
-          </div>
-
-          <div className="divider">
-            <span>or</span>
-          </div>
-
-          <div className="social-login">
-            <button className="google-btn" onClick={handleGoogleSignUp} disabled={isLoading}>
-              <img
-                src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/google/google-original.svg"
-                alt="Google"
-              />
-              Sign up with Google
-            </button>
-
-            <button className="github-btn" onClick={handleGithubSignUp} disabled={isLoading}>
-              <img
-                src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/github/github-original.svg"
-                alt="GitHub"
-              />
-              Sign up with GitHub
-            </button>
           </div>
         </div>
       </div>

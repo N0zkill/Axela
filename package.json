@@ -43,6 +43,7 @@
     "@radix-ui/react-toggle": "^1.1.2",
     "@radix-ui/react-toggle-group": "^1.1.2",
     "@radix-ui/react-tooltip": "^1.1.8",
+    "@supabase/supabase-js": "^2.76.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.0.0",
@@ -77,6 +78,7 @@
     "concurrently": "^9.2.1",
     "electron": "^38.2.0",
     "electron-builder": "^26.0.12",
+    "electron-is-dev": "^3.0.1",
     "eslint": "^9.19.0",
     "eslint-plugin-react": "^7.37.4",
     "eslint-plugin-react-hooks": "^5.0.0",
@@ -85,8 +87,7 @@
     "postcss": "^8.5.3",
     "tailwindcss": "^3.4.17",
     "vite": "^6.1.0",
-    "wait-on": "^9.0.1",
-    "electron-is-dev": "^3.0.1"
+    "wait-on": "^9.0.1"
   },
   "build": {
     "appId": "com.axela.desktop",

@@ -5,8 +5,11 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import { MessageSquare, Shield, Zap, Mic, Save, RefreshCw, Keyboard } from "lucide-react";
+import { MessageSquare, Shield, Zap, Mic, Save, RefreshCw, Keyboard, LogOut } from "lucide-react";
 import { motion } from "framer-motion";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
+import { useToast } from "@/hooks/use-toast";
 import KeybindCapture from "./KeybindCapture";
 
 export default function SettingsPanel({ axelaAPI }) {
@@ -17,6 +20,9 @@ export default function SettingsPanel({ axelaAPI }) {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [availableVoices, setAvailableVoices] = useState([]);
   const [availableMicrophones, setAvailableMicrophones] = useState([]);
+  const navigate = useNavigate();
+  const { signOut, user } = useAuth();
+  const { toast } = useToast();
 
   const loadConfig = useCallback(async () => {
     try {
@@ -150,6 +156,24 @@ export default function SettingsPanel({ axelaAPI }) {
       console.error('Error restoring defaults:', error);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+      toast({
+        title: "Signed out",
+        description: "You have been successfully signed out.",
+      });
+      navigate('/signin');
+    } catch (error) {
+      console.error('Error signing out:', error);
+      toast({
+        title: "Error",
+        description: "Failed to sign out. Please try again.",
+        variant: "destructive",
+      });
     }
   };
 
@@ -617,6 +641,14 @@ export default function SettingsPanel({ axelaAPI }) {
         >
           <RefreshCw className="w-4 h-4 mr-2" />
           Restore Defaults
+        </Button>
+        <Button
+          onClick={handleSignOut}
+          variant="outline"
+          className="border-red-700 hover:bg-red-900 text-red-400 hover:text-red-300 px-6 h-11"
+        >
+          <LogOut className="w-4 h-4 mr-2" />
+          Sign Out
         </Button>
       </motion.div>
     </div>
