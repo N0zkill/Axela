@@ -84,6 +84,7 @@ export default function SettingsPanel({ axelaAPI }) {
     try {
       // Save each section that has changes
       const sections = ['mode', 'voice', 'security', 'performance', 'hotkeys', 'custom'];
+      const changedSections = []; // Track which sections actually changed
       
       for (const section of sections) {
         if (section === 'mode') {
@@ -94,6 +95,7 @@ export default function SettingsPanel({ axelaAPI }) {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ section: 'app', settings: { mode: config.mode } })
             });
+            changedSections.push({ section: 'app', settings: { mode: config.mode } });
           }
         } else if (JSON.stringify(config[section]) !== JSON.stringify(originalConfig[section])) {
           await fetch('http://127.0.0.1:8000/config', {
@@ -101,6 +103,7 @@ export default function SettingsPanel({ axelaAPI }) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ section, settings: config[section] })
           });
+          changedSections.push({ section, settings: config[section] });
         }
       }
 
@@ -114,10 +117,12 @@ export default function SettingsPanel({ axelaAPI }) {
         }
       }
 
-      // Notify other components
-      window.dispatchEvent(new CustomEvent('axela-config-changed', {
-        detail: { section: 'all', settings: config }
-      }));
+      // Notify other components for each changed section
+      for (const change of changedSections) {
+        window.dispatchEvent(new CustomEvent('axela-config-changed', {
+          detail: change
+        }));
+      }
       
     } catch (error) {
       console.error('Error saving settings:', error);
