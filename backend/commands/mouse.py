@@ -14,6 +14,7 @@ class MouseController:
     def __init__(self):
         self.screen_width, self.screen_height = pyautogui.size()
         self.last_position = (0, 0)
+        self._element_finder = None
 
     def click(self, target: Union[str, Tuple[int, int]], button: str = 'left') -> bool:
         try:
@@ -126,7 +127,11 @@ class MouseController:
                     screenshot_path = tmp_file.name
 
                 try:
-                    finder = SmartElementFinder()
+                    # Use cached finder instance
+                    if self._element_finder is None:
+                        self._element_finder = SmartElementFinder()
+
+                    finder = self._element_finder
 
                     description_lower = description.lower().strip()
                     print(f"Searching for element: '{description}'")

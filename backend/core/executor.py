@@ -308,7 +308,37 @@ class CommandExecutor:
     def _open_file(self, path: str) -> bool:
         try:
             if sys.platform == "win32":
+                # Get list of processes with names before opening
+                before_processes = {}
+                for p in psutil.process_iter(['pid', 'name']):
+                    try:
+                        if p.info['pid']:
+                            before_processes[p.info['pid']] = p.info['name']
+                    except:
+                        pass
+
                 os.startfile(path)
+
+                time.sleep(0.3)
+
+                skip_processes = {'explorer.exe', 'dwm.exe', 'winlogon.exe', 'csrss.exe', 'lsass.exe'}
+
+                after_processes = {}
+                for p in psutil.process_iter(['pid', 'name']):
+                    try:
+                        if p.info['pid']:
+                            after_processes[p.info['pid']] = p.info['name']
+                    except:
+                        pass
+
+                new_processes = set(after_processes.keys()) - set(before_processes.keys())
+
+                if new_processes:
+                    for pid in new_processes:
+                        process_name = after_processes.get(pid, '').lower()
+                        if process_name not in skip_processes:
+                            if self._focus_window_by_process(pid):
+                                break
             elif sys.platform == "darwin":
                 subprocess.run(["open", path])
             else:
@@ -383,7 +413,7 @@ class CommandExecutor:
             if sys.platform == "win32":
                 process = subprocess.Popen(actual_program, shell=True)
 
-                time.sleep(0.2)
+                time.sleep(0.1)
 
                 self._focus_program_window(actual_program, process.pid)
             else:
@@ -405,6 +435,8 @@ class CommandExecutor:
             user32 = ctypes.windll.user32
             kernel32 = ctypes.windll.kernel32
 
+            focused_success = {'value': False}
+
             def enum_windows_proc(hwnd, lParam):
                 try:
                     process_id_ptr = ctypes.pointer(wintypes.DWORD())
@@ -416,6 +448,7 @@ class CommandExecutor:
                             user32.ShowWindow(hwnd, SW_RESTORE)
                             user32.SetForegroundWindow(hwnd)
                             user32.SetActiveWindow(hwnd)
+                            focused_success['value'] = True
                             return False
                 except:
                     pass
@@ -424,22 +457,62 @@ class CommandExecutor:
             EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
             enum_proc = EnumWindowsProc(enum_windows_proc)
 
-            for attempt in range(10):
+            for attempt in range(8):
                 user32.EnumWindows(enum_proc, 0)
-                time.sleep(0.2)
 
-                try:
-                    for proc in psutil.process_iter(['pid', 'name']):
-                        if proc.info['pid'] == process_id:
-                            return True
-                except:
-                    pass
+                if focused_success['value']:
+                    break
+
+                if attempt < 7:
+                    time.sleep(0.1)
 
             return True
 
         except Exception as e:
             if hasattr(self, 'logger') and self.logger:
                 self.logger.log_error(f"Failed to focus window for {program_name}: {e}")
+            return False
+
+    def _focus_window_by_process(self, process_id: int) -> bool:
+        if sys.platform != "win32":
+            return False
+
+        try:
+            SW_RESTORE = 9
+            user32 = ctypes.windll.user32
+
+            focused_success = {'value': False}
+
+            def enum_windows_proc(hwnd, lParam):
+                try:
+                    process_id_ptr = ctypes.pointer(wintypes.DWORD())
+                    user32.GetWindowThreadProcessId(hwnd, process_id_ptr)
+                    window_pid = process_id_ptr.contents.value
+
+                    if window_pid == process_id:
+                        if user32.IsWindowVisible(hwnd):
+                            user32.ShowWindow(hwnd, SW_RESTORE)
+                            user32.SetForegroundWindow(hwnd)
+                            user32.SetActiveWindow(hwnd)
+                            focused_success['value'] = True
+                            return False
+                except:
+                    pass
+                return True
+
+            EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+            enum_proc = EnumWindowsProc(enum_windows_proc)
+
+            for attempt in range(6):
+                user32.EnumWindows(enum_proc, 0)
+
+                if focused_success['value']:
+                    break
+
+                if attempt < 5:
+                    time.sleep(0.08)
+            return True
+        except:
             return False
 
     def _close_program(self, program: str) -> bool:
