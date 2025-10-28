@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabaseClient';
+import { ensureProfile, getProfile } from '@/lib/profileService';
 
 const AuthContext = createContext();
 
@@ -14,6 +15,7 @@ export function useAuth() {
 export function AuthProvider({ children }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [user, setUser] = useState(null);
+  const [profile, setProfile] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [session, setSession] = useState(null);
   const handledOAuthRef = useRef(false);
@@ -24,11 +26,21 @@ export function AuthProvider({ children }) {
     let fallbackTimer = null;
     let subscription = null;
 
-    const updateAuthState = (nextSession) => {
+    const updateAuthState = async (nextSession) => {
       if (!isMounted) return;
       setSession(nextSession);
       setIsAuthenticated(Boolean(nextSession));
       setUser(nextSession?.user ?? null);
+      
+      // Load or create user profile when authenticated
+      if (nextSession?.user) {
+        const { data: profileData } = await ensureProfile(nextSession.user);
+        if (profileData && isMounted) {
+          setProfile(profileData);
+        }
+      } else {
+        setProfile(null);
+      }
     };
 
     const finalizeInitialLoad = () => {
@@ -179,6 +191,7 @@ export function AuthProvider({ children }) {
 
     setIsAuthenticated(false);
     setUser(null);
+    setProfile(null);
     setSession(null);
   };
 
@@ -209,6 +222,7 @@ export function AuthProvider({ children }) {
   const value = {
     isAuthenticated,
     user,
+    profile,
     session,
     isLoading,
     signIn,
