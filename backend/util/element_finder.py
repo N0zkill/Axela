@@ -30,29 +30,40 @@ class FoundElement:
 class SmartElementFinder:
     def __init__(self, logger=None):
         self.logger = logger
-
         self.easyocr_reader = None
-        if EASYOCR_AVAILABLE:
+        self._initialization_attempted = False
+
+    def _ensure_easyocr_initialized(self):
+        """Lazy initialization of EasyOCR reader."""
+        if self.easyocr_reader is not None:
+            return
+
+        if not EASYOCR_AVAILABLE or self._initialization_attempted:
+            return
+
+        try:
+            self._initialization_attempted = True
             try:
-                try:
-                    self.easyocr_reader = easyocr.Reader(['en'], gpu=True)
-                    if self.logger:
-                        self.logger.log_info("EasyOCR initialized with GPU support")
-                except Exception:
-                    self.easyocr_reader = easyocr.Reader(['en'], gpu=False)
-                    if self.logger:
-                        self.logger.log_info("EasyOCR initialized with CPU (GPU not available)")
+                self.easyocr_reader = easyocr.Reader(['en'], gpu=True, verbose=False)
                 if self.logger:
-                    self.logger.log_info("EasyOCR initialized successfully")
-            except Exception as e:
+                    self.logger.log_info("EasyOCR initialized with GPU support")
+            except Exception:
+                self.easyocr_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
                 if self.logger:
-                    self.logger.log_warning(f"EasyOCR initialization failed: {e}")
+                    self.logger.log_info("EasyOCR initialized with CPU (GPU not available)")
+            if self.logger:
+                self.logger.log_info("EasyOCR initialized successfully")
+        except Exception as e:
+            if self.logger:
+                self.logger.log_warning(f"EasyOCR initialization failed: {e}")
 
     def find_elements_by_text(self, image_path: str, target_text: str, fuzzy_match: bool = True) -> List[FoundElement]:
         elements = []
 
         if not Path(image_path).exists():
             return elements
+
+        self._ensure_easyocr_initialized()
 
         try:
             if self.easyocr_reader:
@@ -196,6 +207,8 @@ class SmartElementFinder:
 
     def _extract_all_text(self, image_path: str) -> List[FoundElement]:
         elements = []
+
+        self._ensure_easyocr_initialized()
 
         if self.easyocr_reader:
             try:
