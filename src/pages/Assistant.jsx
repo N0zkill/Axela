@@ -9,6 +9,14 @@ import ChatInput from "../components/chat/ChatInput";
 import SettingsPanel from "../components/settings/SettingsPanel";
 import ScriptManagementPanel from "../components/scripts/ScriptManagementPanel";
 import { useAxelaAPI } from "../hooks/useAxelaAPI";
+import { useAuth } from "../contexts/AuthContext";
+import {
+  getConversationsWithMessages,
+  createConversation,
+  deleteConversation as deleteConversationDB,
+  createMessage,
+  updateConversation,
+} from "../lib/chatService";
 
 export default function AssistantPage() {
   const [activeTab, setActiveTab] = useState("chat");
@@ -17,10 +25,12 @@ export default function AssistantPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [mode, setMode] = useState("ai"); // "manual", "ai", or "chat"
   const [autoSpeak, setAutoSpeak] = useState(false);
+  const [isLoadingConversations, setIsLoadingConversations] = useState(true);
   const messagesEndRef = useRef(null);
   const chatInputRef = useRef(null);
 
   const axelaAPI = useAxelaAPI();
+  const { user } = useAuth();
 
   const loadMode = useCallback(async () => {
     try {
@@ -41,13 +51,45 @@ export default function AssistantPage() {
     }
   }, [axelaAPI]);
 
+  const loadConversations = useCallback(async () => {
+    if (!user?.id) {
+      setIsLoadingConversations(false);
+      return;
+    }
+
+    try {
+      setIsLoadingConversations(true);
+      const { data, error } = await getConversationsWithMessages(user.id);
+      
+      if (error) {
+        console.error('Error loading conversations:', error);
+        return;
+      }
+
+      if (data && data.length > 0) {
+        // Mark the first conversation as active
+        const updatedConversations = data.map((conv, index) => ({
+          ...conv,
+          isActive: index === 0,
+        }));
+        setConversations(updatedConversations);
+        setCurrentConversation(updatedConversations[0]);
+      } else {
+        // No conversations exist, create a new one
+        await createNewConversation();
+      }
+    } catch (error) {
+      console.error('Error loading conversations:', error);
+    } finally {
+      setIsLoadingConversations(false);
+    }
+  }, [user]);
+
   // Separate useEffect for initial setup
   useEffect(() => {
-    if (conversations.length === 0) {
-      createNewConversation();
-    }
     loadMode();
-  }, []);
+    loadConversations();
+  }, [loadMode, loadConversations]);
 
   // Separate useEffect for config changes (no hotkey listener here)
   useEffect(() => {
@@ -73,27 +115,37 @@ export default function AssistantPage() {
         // Show emergency stop notification
         console.log('Emergency stop activated in UI!');
         
-        // Add emergency message
-        const emergencyMessage = {
-          id: Date.now().toString(),
-          content: '🚨 Emergency Stop Activated!\n\nThe Axela backend has been forcefully terminated. All running commands have been stopped.\n\nThe backend will automatically restart in 2 seconds...',
-          role: 'assistant',
-          timestamp: new Date().toISOString(),
-          success: false
-        };
+        const emergencyContent = '🚨 Emergency Stop Activated!\n\nThe Axela backend has been forcefully terminated. All running commands have been stopped.\n\nThe backend will automatically restart in 2 seconds...';
         
         setConversations(prev => {
           const current = prev.find(c => c.isActive);
-          if (current) {
-            const updatedMessages = [...(current.messages || []), emergencyMessage];
-            const updatedConv = { 
-              ...current, 
-              messages: updatedMessages,
-              updatedAt: new Date().toISOString()
-            };
-            
-            setCurrentConversation(updatedConv);
-            return prev.map(c => c.id === current.id ? updatedConv : c);
+          if (current && user?.id) {
+            // Save emergency message to database
+            createMessage(current.id, {
+              role: 'assistant',
+              content: emergencyContent,
+              success: false,
+            }).then(({ data: msgData }) => {
+              if (msgData) {
+                const emergencyMessage = {
+                  id: msgData.id,
+                  content: msgData.content,
+                  role: msgData.role,
+                  timestamp: msgData.created_at,
+                  success: false
+                };
+                
+                const updatedMessages = [...(current.messages || []), emergencyMessage];
+                const updatedConv = { 
+                  ...current, 
+                  messages: updatedMessages,
+                  updatedAt: new Date().toISOString()
+                };
+                
+                setCurrentConversation(updatedConv);
+                setConversations(prev => prev.map(c => c.id === current.id ? updatedConv : c));
+              }
+            }).catch(err => console.error('Error saving emergency message:', err));
           }
           return prev;
         });
@@ -101,26 +153,37 @@ export default function AssistantPage() {
         // Show restart notification after backend auto-restarts (4 seconds)
         setTimeout(() => {
           console.log('Adding restart success message');
-          const restartMessage = {
-            id: Date.now().toString() + '_restart',
-            content: '✅ Backend Restarted Successfully\n\nAxela is back online and ready to accept commands.',
-            role: 'assistant',
-            timestamp: new Date().toISOString(),
-            success: true
-          };
+          const restartContent = '✅ Backend Restarted Successfully\n\nAxela is back online and ready to accept commands.';
           
           setConversations(prev => {
             const current = prev.find(c => c.isActive);
-            if (current) {
-              const updatedMessages = [...(current.messages || []), restartMessage];
-              const updatedConv = { 
-                ...current, 
-                messages: updatedMessages,
-                updatedAt: new Date().toISOString()
-              };
-              
-              setCurrentConversation(updatedConv);
-              return prev.map(c => c.id === current.id ? updatedConv : c);
+            if (current && user?.id) {
+              // Save restart message to database
+              createMessage(current.id, {
+                role: 'assistant',
+                content: restartContent,
+                success: true,
+              }).then(({ data: msgData }) => {
+                if (msgData) {
+                  const restartMessage = {
+                    id: msgData.id,
+                    content: msgData.content,
+                    role: msgData.role,
+                    timestamp: msgData.created_at,
+                    success: true
+                  };
+                  
+                  const updatedMessages = [...(current.messages || []), restartMessage];
+                  const updatedConv = { 
+                    ...current, 
+                    messages: updatedMessages,
+                    updatedAt: new Date().toISOString()
+                  };
+                  
+                  setCurrentConversation(updatedConv);
+                  setConversations(prev => prev.map(c => c.id === current.id ? updatedConv : c));
+                }
+              }).catch(err => console.error('Error saving restart message:', err));
             }
             return prev;
           });
@@ -137,7 +200,7 @@ export default function AssistantPage() {
       // Don't remove all listeners, other components might be using them
       // The Electron main process manages the actual hotkey registration
     };
-  }, []); // Empty dependency - only run once
+  }, [user]); // Include user in dependencies
 
   useEffect(() => {
     scrollToBottom();
@@ -147,28 +210,63 @@ export default function AssistantPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const createNewConversation = () => {
-    const newConv = {
-      id: Date.now().toString(),
-      title: "New Conversation",
-      messages: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      isActive: true
-    };
-    setConversations(prev => [newConv, ...prev]);
-    setCurrentConversation(newConv);
+  const createNewConversation = async () => {
+    if (!user?.id) {
+      console.error('Cannot create conversation: user not authenticated');
+      return;
+    }
+
+    try {
+      const { data, error } = await createConversation(user.id, "New Conversation");
+      
+      if (error) {
+        console.error('Error creating conversation:', error);
+        return;
+      }
+
+      const newConv = {
+        id: data.id,
+        title: data.title,
+        messages: [],
+        createdAt: data.created_at,
+        updatedAt: data.updated_at,
+        isActive: true
+      };
+
+      setConversations(prev => {
+        // Mark all other conversations as inactive
+        const updatedPrev = prev.map(c => ({ ...c, isActive: false }));
+        return [newConv, ...updatedPrev];
+      });
+      setCurrentConversation(newConv);
+    } catch (error) {
+      console.error('Error creating conversation:', error);
+    }
   };
 
-  const deleteConversation = (convId) => {
-    setConversations(prev => prev.filter(c => c.id !== convId));
-    if (currentConversation?.id === convId) {
-      const remaining = conversations.filter(c => c.id !== convId);
-      if (remaining.length > 0) {
-        setCurrentConversation(remaining[0]);
-      } else {
-        createNewConversation();
+  const deleteConversation = async (convId) => {
+    try {
+      // Delete from database
+      const { error } = await deleteConversationDB(convId);
+      
+      if (error) {
+        console.error('Error deleting conversation:', error);
+        return;
       }
+
+      // Update local state
+      setConversations(prev => prev.filter(c => c.id !== convId));
+      
+      if (currentConversation?.id === convId) {
+        const remaining = conversations.filter(c => c.id !== convId);
+        if (remaining.length > 0) {
+          setCurrentConversation(remaining[0]);
+        } else {
+          await createNewConversation();
+        }
+      }
+    } catch (error) {
+      console.error('Error deleting conversation:', error);
     }
   };
 
@@ -194,59 +292,113 @@ export default function AssistantPage() {
   };
 
   const sendMessage = async (content) => {
-    if (!content.trim()) return;
+    if (!content.trim() || !user?.id) return;
 
     let conv = currentConversation;
+    
+    // Create new conversation if none exists
     if (!conv) {
-      conv = {
-        id: Date.now().toString(),
-        title: content.substring(0, 50),
-        messages: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        isActive: true
-      };
-      setConversations(prev => [conv, ...prev]);
-      setCurrentConversation(conv);
+      try {
+        const { data, error } = await createConversation(user.id, content.substring(0, 50));
+        
+        if (error) {
+          console.error('Error creating conversation:', error);
+          return;
+        }
+
+        conv = {
+          id: data.id,
+          title: data.title,
+          messages: [],
+          createdAt: data.created_at,
+          updatedAt: data.updated_at,
+          isActive: true
+        };
+        
+        setConversations(prev => [conv, ...prev]);
+        setCurrentConversation(conv);
+      } catch (error) {
+        console.error('Error creating conversation:', error);
+        return;
+      }
     }
 
-    const userMessage = {
-      id: Date.now().toString(),
-      content,
-      role: "user",
-      timestamp: new Date().toISOString()
-    };
-
-    const updatedMessages = [...(conv.messages || []), userMessage];
-    const updatedConv = { ...conv, messages: updatedMessages, updatedAt: new Date().toISOString() };
-
-    setCurrentConversation(updatedConv);
-    setConversations(prev => prev.map(c => c.id === conv.id ? updatedConv : c));
     setIsProcessing(true);
 
+    // Save user message to database
+    let userMessageDB;
     try {
+      const { data: msgData, error: msgError } = await createMessage(conv.id, {
+        role: 'user',
+        content: content,
+        success: true,
+      });
+
+      if (msgError) {
+        console.error('Error saving user message:', msgError);
+        setIsProcessing(false);
+        return;
+      }
+
+      userMessageDB = msgData;
+
+      // Update local state with user message
+      const userMessage = {
+        id: msgData.id,
+        content: msgData.content,
+        role: msgData.role,
+        timestamp: msgData.created_at
+      };
+
+      const updatedMessages = [...(conv.messages || []), userMessage];
+      const updatedConv = { ...conv, messages: updatedMessages, updatedAt: new Date().toISOString() };
+
+      setCurrentConversation(updatedConv);
+      setConversations(prev => prev.map(c => c.id === conv.id ? updatedConv : c));
+
+      // Execute the command
       console.log('>>> Current mode state before sending:', mode);
       console.log('>>> Mode type:', typeof mode);
       console.log('>>> Mode value check:', mode === 'chat', mode === 'ai', mode === 'manual');
       const result = await axelaAPI.executeCommand(content, mode);
 
-      const assistantMessage = {
-        id: (Date.now() + 1).toString(),
-        content: result.success
-          ? result.message
-          : `Error: ${result.message || 'Command failed'}`,
-        role: "assistant",
-        timestamp: new Date().toISOString(),
+      // Save assistant message to database
+      const { data: assistantMsgData, error: assistantMsgError } = await createMessage(conv.id, {
+        role: 'assistant',
+        content: result.success ? result.message : `Error: ${result.message || 'Command failed'}`,
         success: result.success,
-        data: result.data
+        data: result.data,
+      });
+
+      if (assistantMsgError) {
+        console.error('Error saving assistant message:', assistantMsgError);
+        setIsProcessing(false);
+        return;
+      }
+
+      const assistantMessage = {
+        id: assistantMsgData.id,
+        content: assistantMsgData.content,
+        role: assistantMsgData.role,
+        timestamp: assistantMsgData.created_at,
+        success: assistantMsgData.success,
+        data: assistantMsgData.data
       };
 
       const finalMessages = [...updatedMessages, assistantMessage];
+      
+      // Update conversation title if this is the first message
+      let finalTitle = updatedConv.title;
+      if (finalMessages.length === 2 && finalTitle === 'New Conversation') {
+        finalTitle = content.substring(0, 50);
+        await updateConversation(conv.id, { title: finalTitle });
+      }
+
       const finalConv = {
         ...updatedConv,
         messages: finalMessages,
         updatedAt: new Date().toISOString(),
-        title: finalMessages.length === 2 ? content.substring(0, 50) : updatedConv.title
+        title: finalTitle
       };
 
       setCurrentConversation(finalConv);
@@ -274,20 +426,40 @@ export default function AssistantPage() {
         : false;
 
       // Don't show error message if backend is restarting
-      if (!isRestarting) {
-        const errorMessage = {
-          id: (Date.now() + 1).toString(),
-          content: `I encountered an error: ${error.message}. Please make sure the Axela backend is running.`,
-          role: "assistant",
-          timestamp: new Date().toISOString(),
-          success: false
-        };
+      if (!isRestarting && conv) {
+        const errorContent = `I encountered an error: ${error.message}. Please make sure the Axela backend is running.`;
+        
+        // Save error message to database
+        try {
+          const { data: errorMsgData } = await createMessage(conv.id, {
+            role: 'assistant',
+            content: errorContent,
+            success: false,
+          });
 
-        const finalMessages = [...updatedMessages, errorMessage];
-        const finalConv = { ...updatedConv, messages: finalMessages, updatedAt: new Date().toISOString() };
+          if (errorMsgData) {
+            const errorMessage = {
+              id: errorMsgData.id,
+              content: errorMsgData.content,
+              role: errorMsgData.role,
+              timestamp: errorMsgData.created_at,
+              success: false
+            };
 
-        setCurrentConversation(finalConv);
-        setConversations(prev => prev.map(c => c.id === conv.id ? finalConv : c));
+            const currentMessages = conv.messages || [];
+            const finalMessages = [...currentMessages, errorMessage];
+            const finalConv = { 
+              ...conv, 
+              messages: finalMessages, 
+              updatedAt: new Date().toISOString() 
+            };
+
+            setCurrentConversation(finalConv);
+            setConversations(prev => prev.map(c => c.id === conv.id ? finalConv : c));
+          }
+        } catch (dbError) {
+          console.error('Error saving error message to database:', dbError);
+        }
       }
     } finally {
       setIsProcessing(false);
