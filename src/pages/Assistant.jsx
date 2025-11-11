@@ -37,19 +37,19 @@ export default function AssistantPage() {
       const response = await axelaAPI.getConfig();
       console.log('>>> Config response:', response);
       console.log('>>> Mode from config:', response?.config?.mode);
-      
+
       const newMode = response?.config?.mode || "ai";
       console.log('>>> Setting mode to:', newMode);
       setMode(newMode);
-      
+
       // Load auto-speak setting
       const autoSpeakEnabled = response?.config?.custom?.auto_speak_responses === true;
       setAutoSpeak(autoSpeakEnabled);
     } catch (error) {
       console.error("Error loading mode:", error);
-      setMode("ai"); 
+      setMode("ai");
     }
-  }, [axelaAPI]);
+  }, [axelaAPI.getConfig]);
 
   const loadConversations = useCallback(async () => {
     if (!user?.id) {
@@ -60,7 +60,7 @@ export default function AssistantPage() {
     try {
       setIsLoadingConversations(true);
       const { data, error } = await getConversationsWithMessages(user.id);
-      
+
       if (error) {
         console.error('Error loading conversations:', error);
         return;
@@ -85,28 +85,30 @@ export default function AssistantPage() {
     }
   }, [user]);
 
-  // Separate useEffect for initial setup
+  // Separate useEffect for initial setup - only run once on mount
   useEffect(() => {
     loadMode();
     loadConversations();
-  }, [loadMode, loadConversations]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty dependency array - only run on mount
 
   // Separate useEffect for config changes (no hotkey listener here)
   useEffect(() => {
-    const handleConfigChange = (event) => {
+    const handleConfigChange = async (event) => {
       if (event.detail.section === 'app' && event.detail.settings.mode) {
-        loadMode();
+        // Update mode directly from the event, no need to fetch config again
+        setMode(event.detail.settings.mode);
       } else if (event.detail.section === 'custom' && 'auto_speak_responses' in event.detail.settings) {
         setAutoSpeak(event.detail.settings.auto_speak_responses);
       }
     };
 
     window.addEventListener('axela-config-changed', handleConfigChange);
-    
+
     return () => {
       window.removeEventListener('axela-config-changed', handleConfigChange);
     };
-  }, [loadMode]);
+  }, []); // No dependencies - event handler doesn't need to change
 
   // Separate useEffect for hotkeys - only run once on mount
   useEffect(() => {
@@ -114,9 +116,9 @@ export default function AssistantPage() {
       if (hotkey === 'emergency_stop') {
         // Show emergency stop notification
         console.log('Emergency stop activated in UI!');
-        
+
         const emergencyContent = '🚨 Emergency Stop Activated!\n\nThe Axela backend has been forcefully terminated. All running commands have been stopped.\n\nThe backend will automatically restart in 2 seconds...';
-        
+
         setConversations(prev => {
           const current = prev.find(c => c.isActive);
           if (current && user?.id) {
@@ -134,14 +136,14 @@ export default function AssistantPage() {
                   timestamp: msgData.created_at,
                   success: false
                 };
-                
+
                 const updatedMessages = [...(current.messages || []), emergencyMessage];
-                const updatedConv = { 
-                  ...current, 
+                const updatedConv = {
+                  ...current,
                   messages: updatedMessages,
                   updatedAt: new Date().toISOString()
                 };
-                
+
                 setCurrentConversation(updatedConv);
                 setConversations(prev => prev.map(c => c.id === current.id ? updatedConv : c));
               }
@@ -149,12 +151,12 @@ export default function AssistantPage() {
           }
           return prev;
         });
-        
+
         // Show restart notification after backend auto-restarts (4 seconds)
         setTimeout(() => {
           console.log('Adding restart success message');
           const restartContent = '✅ Backend Restarted Successfully\n\nAxela is back online and ready to accept commands.';
-          
+
           setConversations(prev => {
             const current = prev.find(c => c.isActive);
             if (current && user?.id) {
@@ -172,14 +174,14 @@ export default function AssistantPage() {
                     timestamp: msgData.created_at,
                     success: true
                   };
-                  
+
                   const updatedMessages = [...(current.messages || []), restartMessage];
-                  const updatedConv = { 
-                    ...current, 
+                  const updatedConv = {
+                    ...current,
                     messages: updatedMessages,
                     updatedAt: new Date().toISOString()
                   };
-                  
+
                   setCurrentConversation(updatedConv);
                   setConversations(prev => prev.map(c => c.id === current.id ? updatedConv : c));
                 }
@@ -190,7 +192,7 @@ export default function AssistantPage() {
         }, 4000);
       }
     };
-    
+
     if (window.electronAPI?.onHotkeyPressed) {
       window.electronAPI.onHotkeyPressed(handleHotkey);
     }
@@ -218,7 +220,7 @@ export default function AssistantPage() {
 
     try {
       const { data, error } = await createConversation(user.id, "New Conversation");
-      
+
       if (error) {
         console.error('Error creating conversation:', error);
         return;
@@ -248,7 +250,7 @@ export default function AssistantPage() {
     try {
       // Delete from database
       const { error } = await deleteConversationDB(convId);
-      
+
       if (error) {
         console.error('Error deleting conversation:', error);
         return;
@@ -256,7 +258,7 @@ export default function AssistantPage() {
 
       // Update local state
       setConversations(prev => prev.filter(c => c.id !== convId));
-      
+
       if (currentConversation?.id === convId) {
         const remaining = conversations.filter(c => c.id !== convId);
         if (remaining.length > 0) {
@@ -295,12 +297,12 @@ export default function AssistantPage() {
     if (!content.trim() || !user?.id) return;
 
     let conv = currentConversation;
-    
+
     // Create new conversation if none exists
     if (!conv) {
       try {
         const { data, error } = await createConversation(user.id, content.substring(0, 50));
-        
+
         if (error) {
           console.error('Error creating conversation:', error);
           return;
@@ -314,7 +316,7 @@ export default function AssistantPage() {
           updatedAt: data.updated_at,
           isActive: true
         };
-        
+
         setConversations(prev => [conv, ...prev]);
         setCurrentConversation(conv);
       } catch (error) {
@@ -386,7 +388,7 @@ export default function AssistantPage() {
       };
 
       const finalMessages = [...updatedMessages, assistantMessage];
-      
+
       // Update conversation title if this is the first message
       let finalTitle = updatedConv.title;
       if (finalMessages.length === 2 && finalTitle === 'New Conversation') {
@@ -404,7 +406,7 @@ export default function AssistantPage() {
       setCurrentConversation(finalConv);
       setConversations(prev => prev.map(c => c.id === conv.id ? finalConv : c));
 
-     
+
       if (autoSpeak && result.success && assistantMessage.content) {
         try {
           await fetch('http://127.0.0.1:8000/speak', {
@@ -421,14 +423,14 @@ export default function AssistantPage() {
       console.error("Error sending message:", error);
 
       // Check if backend is restarting before showing error
-      const isRestarting = window.electronAPI?.isBackendRestarting 
-        ? await window.electronAPI.isBackendRestarting() 
+      const isRestarting = window.electronAPI?.isBackendRestarting
+        ? await window.electronAPI.isBackendRestarting()
         : false;
 
       // Don't show error message if backend is restarting
       if (!isRestarting && conv) {
         const errorContent = `I encountered an error: ${error.message}. Please make sure the Axela backend is running.`;
-        
+
         // Save error message to database
         try {
           const { data: errorMsgData } = await createMessage(conv.id, {
@@ -448,10 +450,10 @@ export default function AssistantPage() {
 
             const currentMessages = conv.messages || [];
             const finalMessages = [...currentMessages, errorMessage];
-            const finalConv = { 
-              ...conv, 
-              messages: finalMessages, 
-              updatedAt: new Date().toISOString() 
+            const finalConv = {
+              ...conv,
+              messages: finalMessages,
+              updatedAt: new Date().toISOString()
             };
 
             setCurrentConversation(finalConv);

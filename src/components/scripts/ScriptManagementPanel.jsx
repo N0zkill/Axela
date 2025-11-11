@@ -14,8 +14,12 @@ import { FileText, Trash2, SlidersHorizontal, Info, Plus, Save, Play, Search, Re
 import { motion, AnimatePresence } from "framer-motion";
 import CommandBlock from "./CommandBlock";
 import { generateCommandText } from "@/api/commandBlocks";
+import { useAuth } from "@/contexts/AuthContext";
+import { useAxelaAPI } from "@/hooks/useAxelaAPI";
 
 export default function ScriptManagementPanel() {
+  const { user } = useAuth();
+  const axelaAPI = useAxelaAPI();
   const [settings, setSettings] = useState(null);
   const [scripts, setScripts] = useState([]);
   const [newScript, setNewScript] = useState({ name: "", description: "", category: "General" });
@@ -30,10 +34,15 @@ export default function ScriptManagementPanel() {
   const [isEditing, setIsEditing] = useState(false);
 
   const loadData = useCallback(async () => {
+    if (!user?.id) {
+      console.error("Cannot load scripts: user not authenticated");
+      return;
+    }
+
     try {
       const [userSettings, savedScripts, scriptCategories] = await Promise.all([
         UserSettings.list(),
-        Script.list('-created_date'),
+        Script.list(user.id, '-created_date'),
         Script.getCategories()
       ]);
 
@@ -48,7 +57,7 @@ export default function ScriptManagementPanel() {
     } catch (error) {
       console.error("Error loading script management data:", error);
     }
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
     loadData();
@@ -457,6 +466,12 @@ export default function ScriptManagementPanel() {
       };
 
 
+      if (!user?.id) {
+        console.error("Cannot save script: user not authenticated");
+        setIsSaving(false);
+        return;
+      }
+
       let savedScript;
       if (isEditing && editingScript) {
         // Update existing script
@@ -465,7 +480,7 @@ export default function ScriptManagementPanel() {
         cancelEdit();
       } else {
         // Create new script
-        savedScript = await Script.create(scriptData);
+        savedScript = await Script.create(user.id, scriptData);
         setScripts(prev => [savedScript, ...prev]);
         setNewScript({ name: "", description: "", category: "General" });
         setCommandBlocks([]);
@@ -483,12 +498,17 @@ export default function ScriptManagementPanel() {
     try {
       const script = scripts.find(s => s.id === scriptId);
 
+      if (!script) {
+        throw new Error("Script not found");
+      }
+
       // If it's a recurring script, enable recurring execution
       if (script && script.is_recurring) {
         await Script.enableRecurring(scriptId, script.recurring_interval);
       }
 
-      const result = await Script.execute(scriptId, 'ai');
+      const result = await script.execute(axelaAPI, user?.id);
+
       setExecutionResults(prev => ({
         ...prev,
         [scriptId]: result
@@ -518,13 +538,18 @@ export default function ScriptManagementPanel() {
   };
 
   const searchScripts = async () => {
+    if (!user?.id) {
+      console.error("Cannot search scripts: user not authenticated");
+      return;
+    }
+
     if (!searchQuery.trim()) {
       await loadData();
       return;
     }
 
     try {
-      const results = await Script.search(searchQuery);
+      const results = await Script.search(user.id, searchQuery);
       setScripts(results);
     } catch (error) {
       console.error("Error searching scripts:", error);
