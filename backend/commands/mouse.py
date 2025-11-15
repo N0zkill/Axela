@@ -15,6 +15,7 @@ class MouseController:
         self.screen_width, self.screen_height = pyautogui.size()
         self.last_position = (0, 0)
         self._element_finder = None
+        self._tried_targets = []  # Track targets that have been tried already
 
     def click(self, target: Union[str, Tuple[int, int]], button: str = 'left') -> bool:
         try:
@@ -117,12 +118,18 @@ class MouseController:
         try:
             try:
                 from util.element_finder import SmartElementFinder
+                from commands.screenshot import ScreenshotCapture
 
                 import tempfile
                 import os
 
+                # Use ScreenshotCapture to properly mask taskbar
+                screenshot_capture = ScreenshotCapture()
+                
                 with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
                     screenshot = pyautogui.screenshot()
+                    # Apply taskbar mask before saving
+                    screenshot = screenshot_capture._apply_taskbar_mask(screenshot)
                     screenshot.save(tmp_file.name)
                     screenshot_path = tmp_file.name
 
@@ -157,21 +164,53 @@ class MouseController:
                             return buttons[0].coordinates
 
                     else:
-                        print(f"Searching for text: '{description}'")
-                        elements = finder.find_elements_by_text(screenshot_path, description, fuzzy_match=True)
+                        # Use exact matching for short specific text or numbers with symbols
+                        use_fuzzy = True
+                        if len(description) <= 5 or any(sym in description for sym in ['$', '€', '£', '¥', '#']):
+                            print(f"Searching for text: '{description}' (EXACT match mode)")
+                            use_fuzzy = False
+                        else:
+                            print(f"Searching for text: '{description}' (fuzzy match mode)")
+                        
+                        # Check if we have tried targets to exclude
+                        exclude_list = getattr(self, '_tried_targets', [])
+                        if exclude_list:
+                            print(f"Excluding {len(exclude_list)} already-tried targets: {exclude_list}")
+                        
+                        elements = finder.find_elements_by_text(screenshot_path, description, fuzzy_match=use_fuzzy, exclude_texts=exclude_list)
                         print(f"Found {len(elements)} matching elements")
+                        
+                        # If exact match found nothing, try fuzzy match as fallback
+                        if not elements and not use_fuzzy:
+                            print("No exact matches found, trying fuzzy match...")
+                            elements = finder.find_elements_by_text(screenshot_path, description, fuzzy_match=True, exclude_texts=exclude_list)
+                            print(f"Found {len(elements)} fuzzy matches")
+                        
                         if elements:
                             print(f"Best match: '{elements[0].text}' at {elements[0].coordinates} (confidence: {elements[0].confidence})")
+                            # Show all matches if multiple found
+                            if len(elements) > 1:
+                                print(f"Other matches:")
+                                for i, elem in enumerate(elements[1:4], 2):  # Show top 3 additional matches
+                                    print(f"  {i}. '{elem.text}' at {elem.coordinates} (confidence: {elem.confidence})")
                             return elements[0].coordinates
                         else:
-                            print("No elements found, trying broader search...")
-                            # Try finding all text and see what we have
+                            print("No matches found, trying similarity search...")
+                            # Try finding all text and pick the most similar one
                             all_elements = finder._extract_all_text(screenshot_path)
                             print(f"Total text elements found: {len(all_elements)}")
                             if all_elements:
-                                print("Sample of detected text:")
-                                for elem in all_elements[:10]:
-                                    print(f"  - '{elem.text}' at {elem.coordinates}")
+                                # Find the most similar text using character similarity
+                                best_match = finder._find_most_similar(all_elements, description)
+                                if best_match:
+                                    print(f"Best similarity match: '{best_match.text}' at {best_match.coordinates} (confidence: {best_match.confidence})")
+                                    return best_match.coordinates
+                                
+                                print("Sample of detected text (sorted by position):")
+                                # Sort by y-position to show elements top to bottom
+                                sorted_elements = sorted(all_elements, key=lambda e: (e.coordinates[1], e.coordinates[0]))
+                                for elem in sorted_elements[:15]:  # Show top 15
+                                    print(f"  - '{elem.text}' at {elem.coordinates} (conf: {elem.confidence:.2f})")
 
                 finally:
                     try:

@@ -9,6 +9,24 @@ export default function ChatMessage({ message }) {
   const [isSpeaking, setIsSpeaking] = React.useState(false);
   const isUser = message.role === "user" || message.sender === "user";
   const isError = message.success === false;
+  let structuredData = null;
+
+  if (message?.data) {
+    if (typeof message.data === "string") {
+      try {
+        structuredData = JSON.parse(message.data);
+      } catch {
+        // Ignore malformed JSON payloads
+        structuredData = null;
+      }
+    } else {
+      structuredData = message.data;
+    }
+  }
+
+  const agentSteps = structuredData?.mode === "agent" && Array.isArray(structuredData?.steps)
+    ? structuredData.steps
+    : [];
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(message.content);
@@ -99,6 +117,35 @@ export default function ChatMessage({ message }) {
           <p className="text-sm leading-relaxed whitespace-pre-wrap">
             {message.content}
           </p>
+
+          {agentSteps.length > 0 && (
+            <div className="mt-3 bg-stone-900/40 rounded-lg border border-stone-700/40 px-3 py-2.5">
+              <p className="text-[11px] uppercase tracking-wide text-stone-400 mb-2 font-semibold">
+                Agent steps
+              </p>
+              <div className="space-y-1.5">
+                {agentSteps.map((step) => (
+                  <div key={`agent-step-${message.id}-${step.step}`} className="flex items-start gap-2">
+                    <span className="text-xs font-mono text-stone-500 pt-0.5">{step.step}.</span>
+                    <div className="flex-1">
+                      <p className="text-xs text-stone-100">
+                        {step.description || step.command?.action || "Action"}
+                      </p>
+                      {step.reasoning && (
+                        <p className="text-[11px] text-stone-500">{step.reasoning}</p>
+                      )}
+                      {step.result && (
+                        <p className="text-[11px] text-stone-400">{step.result}</p>
+                      )}
+                    </div>
+                    <span className={`text-xs font-semibold ${step.success ? "text-emerald-400" : "text-red-400"}`}>
+                      {step.success ? "OK" : "ERR"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {!isUser && (
             <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-white/10">

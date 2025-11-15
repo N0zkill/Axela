@@ -51,16 +51,6 @@ class AIResponse:
     requires_confirmation: bool = False
 
 
-@dataclass
-class AgentStepResponse:
-    success: bool
-    commands: List[ParsedCommand]
-    reasoning: str
-    status: str
-    final_response: Optional[str]
-    warnings: List[str]
-
-
 class AIAgent:
     def __init__(self, logger=None):
         self.logger = logger
@@ -241,31 +231,136 @@ IMPORTANT RULES:
 6. Request confirmation for system-level operations
 7. Estimate realistic execution times
 8. Use specific coordinates when possible
-9. After clicking or navigating, plan a wait or screenshot to verify that the UI changed before assuming success. Gathering context (like taking a screenshot) is never enough on its own-either use it to plan the next action or to extract the requested data explicitly.
-10. Never click or interact with the Windows taskbar/notification area (the masked bottom portion of the screenshot). If you need system controls, explain it rather than touching the OS UI. Treat any text detected in that masked band as unusable.
-11. When you detect multiple OCR matches for a target, choose the one closest to relevant UI context (labels, input boxes, etc.) and explicitly reject matches that are far from the working area (especially near the masked bottom band).
-12. Before issuing a typing command, add a mouse click (or other focusing action) on the exact input field you intend to edit unless you just clicked that same target in the previous step so the caret is active.
-13. Only set status to "complete" when you can explicitly provide the requested result or confirm the final action succeeded. If nothing has changed yet, continue reasoning toward the goal instead of stopping.
+9. Handle edge cases and provide alternatives
+10. Maintain context from previous commands
+11. Add wait commands after web navigation (1-2 seconds) and searches (1 second)
+12. Add wait commands after clicking buttons or links that trigger page loads (0.5-1 seconds)
+13. When you need visual context (like clicking on something), first take a screenshot
 
-CRITICAL TIMING FOR COMPOUND COMMANDS (e.g., "search X and click Y"):
-When a command involves navigation/search followed by interaction:
-- Execute web search/navigation command
-- Wait 1.5-2 seconds for page to load
-- Take screenshot to see loaded content
-- Wait 0.3 seconds for screenshot to save
-- Execute click/interaction command
+TIMING GUIDELINES (REDUCED FOR SPEED):
+- After web navigation: wait 1-2 seconds for page load
+- After search: wait 1 second for results
+- After clicking links/buttons: wait 0.5-1 seconds for response
+- After starting programs: wait 1-2 seconds for launch
+- After taking screenshots: wait 0.3 seconds for file save
+- Between mouse clicks: wait 0.2-0.5 seconds for UI updates
 
-Example: "search for cats and click first result"
-[
-  {"command_type": "web", "action": "search", "parameters": {"query": "cats"}},
-  {"command_type": "utility", "action": "wait", "parameters": {"duration": 1.5}},
-  {"command_type": "screenshot", "action": "capture", "parameters": {}},
-  {"command_type": "utility", "action": "wait", "parameters": {"duration": 0.3}},
-  {"command_type": "mouse", "action": "click", "parameters": {"target": "visible result title"}}
+CRITICAL WORKFLOW PATTERN FOR SEARCH + CLICK:
+When user asks to search AND click (e.g., "search for X and click first result"):
+You MUST generate ALL commands in sequence:
+1. Web search command: {"command_type": "web", "action": "search", "parameters": {"query": "X"}}
+2. Wait command: {"command_type": "utility", "action": "wait", "parameters": {"duration": 1}}
+3. Screenshot command: {"command_type": "screenshot", "action": "capture", "parameters": {}}
+4. Wait command: {"command_type": "utility", "action": "wait", "parameters": {"duration": 0.3}}
+5. Click command: {"command_type": "mouse", "action": "click", "parameters": {"target": "first link"}}
+
+CRITICAL: Even though you can't see the search results yet, you MUST include the click command.
+Use generic targets like "first link", "first result", "first search result" - the system will OCR the screen when executing the click.
+
+Example: "search for minecraft and click first result"
+Should generate: [
+  {search for minecraft},
+  {wait 1 second},
+  {take screenshot},
+  {wait 0.3 seconds},
+  {click with target="first link"}
 ]
 
-WITHOUT THESE WAITS, THE SCREENSHOT WILL CAPTURE THE OLD PAGE BEFORE RESULTS LOAD!
-"""
+DO NOT stop after the screenshot - ALWAYS include the click command when the user requests it!
+
+AUTONOMOUS VISUAL CONTEXT:
+- When you can see a screenshot, analyze it to find exact pixel coordinates for elements
+- Look for buttons, links, text fields, and interactive elements
+- Use specific coordinates (x, y) instead of vague targets like "first result"
+- For mouse clicks, provide exact coordinates: {"x": 150, "y": 300} instead of {"target": "button"}
+- Consider element positions, sizes, and visual appearance
+- If an element is not visible, suggest scrolling or waiting first
+- IMPORTANT: If you need to click on search results or content that loads after an action, include a screenshot command BEFORE clicking to see the current state
+
+COORDINATE GUIDELINES:
+- Buttons and links: Click in the center of the element
+- Text fields: Click slightly to the right of the label or in the input area
+- Search results: Each result typically has clickable title and URL areas
+- Menus: Click on the text of menu items
+- Icons: Click in the center of the icon area
+
+COORDINATE SCALING:
+- You will receive exact screen resolution and screenshot size information
+- Always convert screenshot pixel coordinates to actual screen coordinates
+- If screenshot is 1920x1080 and screen is 1920x1080, use coordinates directly
+- If screenshot is 960x540 and screen is 1920x1080, multiply coordinates by 2
+- Always use the scale factor provided in the visual context
+
+Current system: Windows 10 with dynamic resolution detection"""
+
+    def process_request(self, user_input: str, context: Optional[Dict] = None) -> AIResponse:
+        if not self.client:
+            return AIResponse(
+                success=False,
+                commands=[],
+                explanation="AI agent not properly initialized. Check OpenAI API key.",
+                warnings=["OpenAI API not available"]
+            )
+
+        try:
+            prompt = self._build_prompt(user_input, context)
+
+            model_to_use = self.fast_model if not context else self.model
+
+            response = self.client.chat.completions.create(
+                model=model_to_use,
+                messages=[
+                    {"role": "system", "content": self.system_context},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=self.max_tokens,
+                temperature=self.temperature
+            )
+
+            ai_response_text = response.choices[0].message.content.strip()
+
+            if not ai_response_text.startswith('{'):
+                json_start = ai_response_text.find('{')
+                json_end = ai_response_text.rfind('}') + 1
+                if json_start >= 0 and json_end > json_start:
+                    ai_response_text = ai_response_text[json_start:json_end]
+
+            ai_data = json.loads(ai_response_text)
+
+            return self._parse_ai_response(ai_data)
+
+        except json.JSONDecodeError as e:
+            if self.logger:
+                self.logger.log_error(f"Failed to parse AI response: {e}")
+            return AIResponse(
+                success=False,
+                commands=[],
+                explanation="Failed to parse AI response. Please try rephrasing your request.",
+                warnings=["AI response parsing error"]
+            )
+        except Exception as e:
+            if self.logger:
+                self.logger.log_error(f"AI request failed: {e}")
+            return AIResponse(
+                success=False,
+                commands=[],
+                explanation=f"AI request failed: {str(e)}",
+                warnings=["AI service error"]
+            )
+
+    def _build_prompt(self, user_input: str, context: Optional[Dict] = None) -> str:
+        prompt = f"User Request: {user_input}\n\n"
+
+        if context:
+            prompt += f"Context: {json.dumps(context, indent=2)}\n\n"
+
+        prompt += """Please analyze this request and generate the appropriate commands to fulfill it.
+Consider the current context and break down complex requests into multiple steps.
+Always prioritize safety and ask for confirmation on potentially dangerous operations.
+
+RESPOND ONLY WITH A VALID JSON OBJECT - NO OTHER TEXT. Follow the exact format specified in the system context."""
+
+        return prompt
 
     def _parse_ai_response(self, ai_data: Dict) -> AIResponse:
         try:
@@ -297,78 +392,6 @@ WITHOUT THESE WAITS, THE SCREENSHOT WILL CAPTURE THE OLD PAGE BEFORE RESULTS LOA
                 explanation="Failed to parse AI-generated commands",
                 warnings=["Command parsing error"]
             )
-
-    def _build_prompt(self, user_input: str, context: Optional[Dict] = None) -> str:
-        prompt = f"User Request: {user_input}\n\n"
-
-        if context:
-            prompt += f"Context: {json.dumps(context, indent=2)}\n\n"
-
-        prompt += """Please analyze this request and generate the appropriate commands to fulfill it.
-Consider the current context and break down complex requests into multiple steps.
-Always prioritize safety and ask for confirmation on potentially dangerous operations.
-
-RESPOND ONLY WITH A VALID JSON OBJECT - NO OTHER TEXT. Follow the exact format specified in the system context."""
-
-        return prompt
-
-    def _build_agent_prompt(self, user_goal: str, step_history: List[Dict[str, Any]]) -> str:
-        history_text = "[]"
-        stuck_warning = ""
-        
-        if step_history:
-            try:
-                history_text = json.dumps(step_history, indent=2)
-                
-                # Check if we detected stuck state in recent history
-                for entry in step_history[-3:]:  # Check last 3 steps
-                    if entry.get("stuck_detected"):
-                        already_tried = entry.get("already_tried", "")
-                        stuck_warning = f"""
-⚠️ STUCK DETECTED: You already tried clicking "{already_tried}" and it didn't work.
-CRITICAL: Try a DIFFERENT element this time! Look for:
-- Different text/buttons that might accomplish the same goal
-- Alternative navigation paths
-- Different wording (e.g., "Submit" instead of "Done", "OK" instead of "Done")
-- Elements in different screen locations
-DO NOT click "{already_tried}" again!
-"""
-                        break
-            except Exception:
-                history_text = str(step_history)
-
-        return f"""You are operating in AXELA's Agent Mode. Your mission is to complete the following goal:
-GOAL: \"{user_goal}\"
-
-{stuck_warning}
-
-These are the steps that have already been executed and their outcomes:
-{history_text}
-
-You are about to receive the most recent screenshot for context. Carefully analyze what is currently on screen before deciding on the next action.
-
-RESPONSE REQUIREMENTS:
-1. Respond with VALID JSON only.
-2. Include the following top-level fields:
-   - "success": boolean indicating whether you were able to plan the next action.
-   - "status": "continue", "complete", or "failed".
-   - "reasoning": natural language explanation referencing what you see.
-   - "commands": an array of commands using the standard schema.
-   - "final_response": required when status is "complete" or "failed".
-3. When status is "continue":
-   - Provide EXACTLY ONE actionable command in the "commands" array.
-   - That command should represent the very next step to perform.
-   - If waiting or another observation is required before acting, output a single wait or screenshot command accordingly.
-4. When the goal is finished, set status to "complete", leave "commands" empty, and write a user-facing summary in "final_response".
-5. If the goal cannot be completed, set status to "failed" and explain why in "final_response".
-6. Prefer text-based targets over coordinates whenever possible.
-7. Reference the on-screen elements you observe (button labels, link text, etc.) in "reasoning".
-8. If the goal depends on information that might require being signed in, inspect the screenshot for \"Sign in\", \"Log in\", or similar prompts. If access is blocked, explain that clearly instead of clicking unrelated content.
-9. When trying to view prices, tickers, balances, or other specific data, look for elements containing the goal keywords (e.g., \"BTC\", \"Bitcoin price\") and prefer clicking those exact labels rather than generic hero graphics. If the relevant element is missing, navigate or search using those keywords and explain your reasoning.
-10. After clicking or navigating, plan a wait or screenshot to verify that the UI changed before assuming success. Gathering context (like taking a screenshot) is never enough on its own-either use it to plan the next action or to extract the requested data explicitly.
-11. Before issuing a typing command, add a mouse click (or other focusing action) on the exact input field you intend to edit unless you just clicked that same target in the previous step so the caret is active.
-12. Only set status to "complete" when you can explicitly provide the requested result (e.g., quote the BTC price) or confirm the final action succeeded. If nothing has changed yet, continue reasoning toward the goal instead of stopping.
-"""
 
     def generate_follow_up_suggestions(self, completed_commands: List[ParsedCommand]) -> List[str]:
         suggestions = []
@@ -573,106 +596,6 @@ Analyze the screenshot now to identify the EXACT TEXT of the element you need to
                 warnings=["AI service error"]
             )
 
-    def process_agent_step(self,
-                           user_goal: str,
-                           step_history: List[Dict[str, Any]],
-                           screenshot_path: Optional[str] = None) -> AgentStepResponse:
-        if not self.client:
-            return AgentStepResponse(
-                success=False,
-                commands=[],
-                reasoning="AI agent not properly initialized. Check OpenAI API key.",
-                status="failed",
-                final_response=None,
-                warnings=["OpenAI API not available"]
-            )
-
-        try:
-            prompt = self._build_agent_prompt(user_goal, step_history)
-            messages = [{"role": "system", "content": self.system_context}]
-
-            if screenshot_path and Path(screenshot_path).exists():
-                image_data = self._encode_image(screenshot_path)
-                if image_data:
-                    if self.logger:
-                        self.logger.log_info(f"Agent mode step using screenshot: {screenshot_path}")
-
-                    screen_info = self._get_screen_info(screenshot_path)
-                    visual_prompt = f"""{prompt}
-
-AGENT MODE VISUAL ANALYSIS:
-- Screen Resolution: {screen_info['screen_width']}x{screen_info['screen_height']}
-- Screenshot Size: {screen_info['image_width']}x{screen_info['image_height']}
-- Provide observations about visible UI elements, labels, and state changes.
-- Use ACTUAL SCREEN coordinates (not screenshot pixels) if coordinates are necessary.
-- Always mention what you observe on screen in the "reasoning" field before deciding the next action.
-"""
-                    messages.append({
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": visual_prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_data}"}}
-                        ]
-                    })
-                else:
-                    messages.append({"role": "user", "content": prompt})
-            else:
-                messages.append({"role": "user", "content": prompt})
-
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature
-            )
-
-            ai_response_text = response.choices[0].message.content.strip()
-
-            if not ai_response_text.startswith('{'):
-                json_start = ai_response_text.find('{')
-                json_end = ai_response_text.rfind('}') + 1
-                if json_start >= 0 and json_end > json_start:
-                    ai_response_text = ai_response_text[json_start:json_end]
-
-            ai_data = json.loads(ai_response_text)
-            parsed = self._parse_ai_response(ai_data)
-
-            status = ai_data.get("status", "continue")
-            reasoning = ai_data.get("reasoning") or parsed.explanation
-            final_response = ai_data.get("final_response")
-
-            return AgentStepResponse(
-                success=parsed.success,
-                commands=parsed.commands,
-                reasoning=reasoning,
-                status=status,
-                final_response=final_response,
-                warnings=parsed.warnings
-            )
-
-        except json.JSONDecodeError as e:
-            if self.logger:
-                self.logger.log_error(f"Failed to parse agent response: {e}")
-            return AgentStepResponse(
-                success=False,
-                commands=[],
-                reasoning="Failed to parse agent response. Please try again.",
-                status="failed",
-                final_response=None,
-                warnings=["Agent mode parsing error"]
-            )
-        except Exception as e:
-            if self.logger:
-                self.logger.log_error(f"Agent mode request failed: {e}")
-            return AgentStepResponse(
-                success=False,
-                commands=[],
-                reasoning=f"Agent mode request failed: {str(e)}",
-                status="failed",
-                final_response=None,
-                warnings=["Agent mode error"]
-            )
-
     def _encode_image(self, image_path: str) -> Optional[str]:
         try:
             with open(image_path, "rb") as image_file:
@@ -745,20 +668,6 @@ AGENT MODE VISUAL ANALYSIS:
     def needs_visual_context(self, user_input: str) -> bool:
 
         user_lower = user_input.lower()
-        import re
-        
-        # Check if this is a COMPOUND command (navigation + action)
-        # If so, DON'T take screenshot upfront - let AI generate sequence with screenshot in the middle
-        compound_patterns = [
-            r'search.*and.*(click|select|find)',  # "search for X and click Y"
-            r'(open|go to|navigate).*and.*(click|select)',  # "go to X and click Y"
-            r'(search|open).*then.*(click|select)',  # "search X then click Y"
-        ]
-        
-        for pattern in compound_patterns:
-            if re.search(pattern, user_lower):
-                # This is a compound command - AI should generate screenshot in sequence
-                return False
 
         immediate_visual_patterns = [
             r'^(click|select|find|locate)\s+',
@@ -766,12 +675,14 @@ AGENT MODE VISUAL ANALYSIS:
             r'(current|this|visible)\s+(window|screen|page)',
             r'(what|where)\s+(is|are)\s+',
         ]
+
+        import re
         
-        # Check if command includes click/select actions (standalone, not compound)
+        # Check if command includes click/select actions (even in compound commands)
         if any(re.search(pattern, user_lower) for pattern in [
-            r'^click\s+(on\s+)?(the\s+)?(first|second|third|last|any)',  # Starts with click
-            r'^click\s+(on\s+)?.*\b(result|link|button|element|item)',  # Starts with click
-            r'^select\s+(the\s+)?(first|second|third)',  # Starts with select
+            r'click\s+(on\s+)?(the\s+)?(first|second|third|last|any)',
+            r'click\s+(on\s+)?.*\b(result|link|button|element|item)',
+            r'select\s+(the\s+)?(first|second|third)',
         ]):
             return True
 
@@ -782,4 +693,3 @@ AGENT MODE VISUAL ANALYSIS:
             return False
 
         return any(re.search(pattern, user_lower) for pattern in immediate_visual_patterns)
-

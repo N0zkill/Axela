@@ -23,7 +23,7 @@ export default function AssistantPage() {
   const [conversations, setConversations] = useState([]);
   const [currentConversation, setCurrentConversation] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [mode, setMode] = useState("ai"); // "manual", "ai", or "chat"
+  const [mode, setMode] = useState("ai"); // "manual", "ai", "agent", or "chat"
   const [autoSpeak, setAutoSpeak] = useState(false);
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
   const messagesEndRef = useRef(null);
@@ -49,7 +49,7 @@ export default function AssistantPage() {
       console.error("Error loading mode:", error);
       setMode("ai"); 
     }
-  }, [axelaAPI]);
+  }, [axelaAPI.getConfig]);
 
   const loadConversations = useCallback(async () => {
     if (!user?.id) {
@@ -83,13 +83,14 @@ export default function AssistantPage() {
     } finally {
       setIsLoadingConversations(false);
     }
-  }, [user]);
+  }, [user?.id]);
 
-  // Separate useEffect for initial setup
+  // Separate useEffect for initial setup - only run once on mount
   useEffect(() => {
     loadMode();
     loadConversations();
-  }, [loadMode, loadConversations]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Separate useEffect for config changes (no hotkey listener here)
   useEffect(() => {
@@ -254,24 +255,29 @@ export default function AssistantPage() {
         return;
       }
 
-      // Update local state
-      setConversations(prev => prev.filter(c => c.id !== convId));
-      
-      if (currentConversation?.id === convId) {
-        const remaining = conversations.filter(c => c.id !== convId);
-        if (remaining.length > 0) {
-          setCurrentConversation(remaining[0]);
-        } else {
-          await createNewConversation();
+      // Update local state using functional form to avoid stale closures
+      setConversations(prev => {
+        const remaining = prev.filter(c => c.id !== convId);
+        
+        // If we're deleting the current conversation, switch to another
+        if (currentConversation?.id === convId) {
+          if (remaining.length > 0) {
+            setCurrentConversation(remaining[0]);
+          } else {
+            // Create new conversation if no remaining conversations
+            createNewConversation();
+          }
         }
-      }
+        
+        return remaining;
+      });
     } catch (error) {
       console.error('Error deleting conversation:', error);
     }
   };
 
   const cycleMode = async (direction) => {
-    const modes = ["manual", "ai", "chat"];
+    const modes = ["manual", "ai", "agent", "chat"];
     const currentIndex = modes.indexOf(mode);
     const newIndex = direction === "next"
       ? (currentIndex + 1) % modes.length
@@ -359,7 +365,7 @@ export default function AssistantPage() {
       // Execute the command
       console.log('>>> Current mode state before sending:', mode);
       console.log('>>> Mode type:', typeof mode);
-      console.log('>>> Mode value check:', mode === 'chat', mode === 'ai', mode === 'manual');
+      console.log('>>> Mode value check:', mode === 'chat', mode === 'ai', mode === 'agent', mode === 'manual');
       const result = await axelaAPI.executeCommand(content, mode);
 
       // Save assistant message to database
@@ -559,6 +565,7 @@ export default function AssistantPage() {
                 <span className="text-orange-400 font-medium text-xs px-2">
                   {mode === "chat" && "Chat"}
                   {mode === "ai" && "AI"}
+                  {mode === "agent" && "Agent"}
                   {mode === "manual" && "Manual"}
                 </span>
                 <button

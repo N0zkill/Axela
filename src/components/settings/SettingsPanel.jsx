@@ -24,6 +24,20 @@ export default function SettingsPanel({ axelaAPI }) {
   const { signOut, user } = useAuth();
   const { toast } = useToast();
 
+  const loadVoices = async () => {
+    try {
+      const response = await fetch('http://127.0.0.1:8000/tts/voices');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.voices) {
+          setAvailableVoices(data.voices);
+        }
+      }
+    } catch (error) {
+      console.error("Error loading voices:", error);
+    }
+  };
+
   const loadConfig = useCallback(async () => {
     try {
       const response = await fetch('http://127.0.0.1:8000/config');
@@ -42,20 +56,6 @@ export default function SettingsPanel({ axelaAPI }) {
     }
   }, []);
 
-  const loadVoices = async () => {
-    try {
-      const response = await fetch('http://127.0.0.1:8000/tts/voices');
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success && data.voices) {
-          setAvailableVoices(data.voices);
-        }
-      }
-    } catch (error) {
-      console.error("Error loading voices:", error);
-    }
-  };
-
   const loadMicrophones = async () => {
     try {
       const response = await fetch('http://127.0.0.1:8000/audio/devices');
@@ -70,10 +70,12 @@ export default function SettingsPanel({ axelaAPI }) {
     }
   };
 
+  // Load config and microphones only once on mount
   useEffect(() => {
     loadConfig();
     loadMicrophones();
-  }, [loadConfig]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Update local config state (doesn't save to backend yet)
   const updateLocalSetting = (section, settings) => {
@@ -260,6 +262,32 @@ export default function SettingsPanel({ axelaAPI }) {
                   <Label className="text-stone-200 cursor-pointer">AI Mode</Label>
                   <p className="text-xs text-stone-500 mt-1">
                     AI interprets and executes commands intelligently
+                  </p>
+                </div>
+              </div>
+
+              <div
+                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                  config.mode === "agent"
+                    ? "bg-orange-500/10 border-orange-500/50"
+                    : "bg-stone-800/30 border-stone-700/30 hover:border-stone-600/50"
+                }`}
+                onClick={() => {
+                  setConfig(prev => ({ ...prev, mode: "agent" }));
+                  setHasUnsavedChanges(true);
+                }}
+              >
+                <div className="mt-0.5">
+                  <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                    config.mode === "agent" ? "border-orange-500" : "border-stone-600"
+                  }`}>
+                    {config.mode === "agent" && <div className="w-2 h-2 rounded-full bg-orange-500" />}
+                  </div>
+                </div>
+                <div className="flex-1">
+                  <Label className="text-stone-200 cursor-pointer">Agent Mode</Label>
+                  <p className="text-xs text-stone-500 mt-1">
+                    Uses visual context to reason through goals one action at a time
                   </p>
                 </div>
               </div>

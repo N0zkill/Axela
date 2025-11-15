@@ -83,7 +83,7 @@ export const useAxelaAPI = () => {
         // Use direct API call
         const payload = {
           command: finalCommand,
-          mode  // "manual", "ai", or "chat"
+          mode  // "manual", "ai", "agent", or "chat"
         };
         console.log('>>> Payload:', payload);
         result = await apiCall('/execute', {

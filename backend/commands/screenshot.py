@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 class ScreenshotCapture:
-    def __init__(self, default_directory: str = "screenshots"):
+    def __init__(self, default_directory: str = "screenshots", taskbar_mask_height: int = None):
         self.default_directory = Path(default_directory)
         self.default_directory.mkdir(exist_ok=True)
 
@@ -17,6 +17,24 @@ class ScreenshotCapture:
         self.include_cursor = False
 
         self.screen_width, self.screen_height = pyautogui.size()
+        
+        # Mask bottom of the screen so AI/OCR cannot see or interact with taskbar
+        # Default: 140px, configurable via config.json performance.taskbar_mask_height
+        if taskbar_mask_height is not None:
+            self.taskbar_mask_height = taskbar_mask_height
+        else:
+            # Try to load from config
+            try:
+                import json
+                config_path = Path(__file__).parent.parent / "config.json"
+                if config_path.exists():
+                    with open(config_path, 'r') as f:
+                        config = json.load(f)
+                        self.taskbar_mask_height = config.get('performance', {}).get('taskbar_mask_height', 140)
+                else:
+                    self.taskbar_mask_height = 140
+            except:
+                self.taskbar_mask_height = 140
 
         self.screenshot_history = []
 
@@ -41,6 +59,8 @@ class ScreenshotCapture:
                 screenshot = pyautogui.screenshot(region=region)
             else:
                 screenshot = pyautogui.screenshot()
+
+            screenshot = self._apply_taskbar_mask(screenshot)
 
             screenshot.save(str(filepath), format=self.default_format, quality=self.quality)
 
@@ -207,6 +227,55 @@ class ScreenshotCapture:
 
         draw.line([end, (x1, y1)], fill=color, width=width)
         draw.line([end, (x2, y2)], fill=color, width=width)
+
+    def _apply_taskbar_mask(self, image: Image.Image) -> Image.Image:
+        """Hide bottom taskbar so the agent does not click OS UI elements."""
+        try:
+            if self.taskbar_mask_height <= 0:
+                return image
+
+            masked = image.copy()
+            draw = ImageDraw.Draw(masked)
+
+            mask_height = min(self.taskbar_mask_height, masked.height // 2)
+            y_start = masked.height - mask_height
+
+            # Draw black rectangle over taskbar area
+            draw.rectangle(
+                [(0, y_start), (masked.width, masked.height)],
+                fill=(12, 12, 12)
+            )
+
+            # Add warning text using modern Pillow API
+            text = "TASKBAR MASKED - DO NOT INTERACT WITH THIS AREA"
+            font = ImageFont.load_default()
+            
+            # Use getbbox instead of deprecated textsize
+            bbox = draw.textbbox((0, 0), text, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+            
+            text_x = max(10, (masked.width - text_width) // 2)
+            text_y = y_start + max(5, (mask_height - text_height) // 2)
+
+            draw.text((text_x, text_y), text, fill=(200, 200, 200), font=font)
+
+            return masked
+        except Exception as e:
+            print(f"Taskbar mask error: {e}")
+            # Even if text fails, still mask the taskbar
+            try:
+                masked = image.copy()
+                draw = ImageDraw.Draw(masked)
+                mask_height = min(self.taskbar_mask_height, masked.height // 2)
+                y_start = masked.height - mask_height
+                draw.rectangle(
+                    [(0, y_start), (masked.width, masked.height)],
+                    fill=(12, 12, 12)
+                )
+                return masked
+            except:
+                return image
 
     def _hex_to_rgb(self, hex_color):
         if hex_color.startswith('#'):

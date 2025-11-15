@@ -52,6 +52,8 @@
     "command_history": "ctrl+alt+h"
   },
   "custom": {
-    "mode": "manual"
+    "mode": "manual",
+    "agent_max_steps": 12,
+    "agent_step_delay": 1.0
   }
 }

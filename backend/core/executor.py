@@ -266,12 +266,12 @@ class CommandExecutor:
 
         try:
             if command.action == ActionType.SEARCH:
-                query = params.get("query", "")
+                query = params.get("query") or params.get("url") or ""
                 success = self._web_search(query)
                 return ExecutionResult(success, f"Searched for: {query}" if success else "Search failed")
 
             elif command.action == ActionType.NAVIGATE:
-                url = params.get("query", "")
+                url = params.get("url") or params.get("query") or ""
                 success = self._web_navigate(url)
                 return ExecutionResult(success, f"Navigated to: {url}" if success else "Navigation failed")
 

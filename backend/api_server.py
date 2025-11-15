@@ -49,7 +49,7 @@ except ImportError as e:
 
 class CommandRequest(BaseModel):
     command: str
-    mode: str = "ai"  # "manual", "ai", or "chat" - default to AI mode
+    mode: str = "ai"  # "manual", "ai", "agent", or "chat" - default to AI mode
 
 
 class CommandResponse(BaseModel):
@@ -96,7 +96,7 @@ class AxelaAPIServer:
 
         self.running = False
 
-        # Mode can be: "manual", "ai", or "chat"
+        # Mode can be: "manual", "ai", "agent", or "chat"
         self.mode = self.config.get_custom_setting("mode", "ai")
 
         self.commands_executed = 0
@@ -229,9 +229,47 @@ class AxelaAPIServer:
                             message=message or f"Command failed: {request.command}"
                         )
 
+                # Agent mode - deliberate step-by-step execution with screen analysis
+                elif mode == "agent":
+                    if not self.ai_agent.is_available():
+                        return CommandResponse(
+                            success=False,
+                            message="Agent mode requires the AI agent to be configured and available."
+                        )
+
+                    success, message, data = await self._run_agent_mode(request.command)
+                    if success:
+                        self.successful_commands += 1
+                    return CommandResponse(
+                        success=success,
+                        message=message,
+                        data=data
+                    )
+
                 # Manual mode - parse and execute directly (supports chaining)
                 else:
                     commands = self.parser.parse_sequence(request.command)
+
+                    contains_unknown = any(
+                        cmd.command_type == CommandType.UNKNOWN
+                        for cmd in commands
+                    )
+
+                    if contains_unknown:
+                        if self.ai_agent.is_available():
+                            agent_success, agent_message, agent_data = await self._run_agent_mode(request.command)
+                            if agent_success:
+                                self.successful_commands += 1
+                            return CommandResponse(
+                                success=agent_success,
+                                message=agent_message,
+                                data=agent_data
+                            )
+                        else:
+                            return CommandResponse(
+                                success=False,
+                                message="I couldn't understand part of that request and Agent mode requires a configured AI agent."
+                            )
 
                     # If sequence produced a single command, keep legacy behavior
                     if len(commands) == 1:
@@ -390,11 +428,11 @@ class AxelaAPIServer:
 
                 if section == "app":
                     if "mode" in settings:
-                        if settings["mode"] in ["manual", "ai", "chat"]:
+                        if settings["mode"] in ["manual", "ai", "agent", "chat"]:
                             self.mode = settings["mode"]
                             self.config.set_custom_setting("mode", settings["mode"])
                         else:
-                            raise ValueError(f"Invalid mode: {settings['mode']}. Must be 'manual', 'ai', or 'chat'")
+                            raise ValueError(f"Invalid mode: {settings['mode']}. Must be 'manual', 'ai', 'agent', or 'chat'")
 
                 elif section == "voice":
                     from util.config import VoiceEngine, TTSEngine
@@ -1415,6 +1453,190 @@ class AxelaAPIServer:
         except Exception as e:
             self.logger.log_error(f"Error in AI command processing: {e}")
             return False, str(e)
+
+    async def _run_agent_mode(self, text: str) -> Tuple[bool, str, Dict[str, Any]]:
+        steps_output: List[Dict[str, Any]] = []
+        history_for_ai: List[Dict[str, Any]] = []
+        tried_targets: List[str] = []  # Track what we've already tried clicking
+
+        try:
+            max_steps = self.config.get_custom_setting("agent_max_steps", 12)
+            try:
+                max_steps = int(max_steps)
+            except (TypeError, ValueError):
+                max_steps = 12
+            max_steps = max(1, max_steps)
+
+            step_delay = self.config.get_custom_setting("agent_step_delay", 1.0)
+            try:
+                step_delay = float(step_delay)
+            except (TypeError, ValueError):
+                step_delay = 1.0
+            step_delay = max(0.0, min(step_delay, 5.0))
+
+            if self.logger:
+                self.logger.log_info(f"Agent mode started | goal='{text}' | max_steps={max_steps}")
+
+            def build_summary(base_message: str) -> str:
+                message = (base_message or "").strip()
+                if steps_output:
+                    summary_lines = ["Agent steps:"]
+                    for step in steps_output:
+                        status = "OK" if step.get("success") else "FAIL"
+                        summary_lines.append(
+                            f"{step.get('step')}. [{status}] {step.get('description', 'Step')} -> {step.get('result', '')}"
+                        )
+                    summary_block = "\n".join(summary_lines)
+                    if message:
+                        message = f"{message}\n\n{summary_block}"
+                    else:
+                        message = summary_block
+                return message or "Agent mode finished."
+
+            for step_index in range(1, max_steps + 1):
+                screenshot_path = self._take_screenshot()
+                agent_response = self.ai_agent.process_agent_step(text, history_for_ai, screenshot_path)
+                current_status = agent_response.status if agent_response.status else "continue"
+
+                if current_status == "complete":
+                    final_resp = (agent_response.final_response or "").strip()
+                    if not final_resp:
+                        if self.logger:
+                            self.logger.log_warning("Agent tried to complete without a final response; continuing.")
+                        current_status = "continue"
+
+                if not agent_response.success:
+                    data = {
+                        "mode": "agent",
+                        "status": current_status if current_status != "continue" else "failed",
+                        "steps": steps_output,
+                        "goal": text,
+                        "total_steps": len(steps_output)
+                    }
+                    return False, build_summary(agent_response.reasoning), data
+
+                if current_status in ("complete", "failed"):
+                    success = current_status == "complete"
+                    data = {
+                        "mode": "agent",
+                        "status": current_status,
+                        "steps": steps_output,
+                        "goal": text,
+                        "total_steps": len(steps_output)
+                    }
+                    final_message = agent_response.final_response or agent_response.reasoning
+                    return success, build_summary(final_message), data
+
+                if not agent_response.commands:
+                    data = {
+                        "mode": "agent",
+                        "status": "failed",
+                        "steps": steps_output,
+                        "goal": text,
+                        "total_steps": len(steps_output)
+                    }
+                    return False, build_summary("Agent did not return a command to execute."), data
+
+                if len(agent_response.commands) > 1:
+                    self.logger.log_warning("Agent mode returned multiple commands; executing only the first.")
+
+                command = agent_response.commands[0]
+                if not self.config.is_command_allowed(
+                    command.command_type.value,
+                    command.action.value
+                ):
+                    data = {
+                        "mode": "agent",
+                        "status": "failed",
+                        "steps": steps_output,
+                        "goal": text,
+                        "total_steps": len(steps_output)
+                    }
+                    message = f"Command not allowed: {command.command_type.value}.{command.action.value}"
+                    return False, build_summary(message), data
+
+                # Detect stuck state - if clicking same target repeatedly
+                if command.command_type.value == "mouse" and command.action.value == "click":
+                    target = command.parameters.get("target", "")
+                    if target and isinstance(target, str):
+                        # Check if we're stuck (tried this exact target before)
+                        if target in tried_targets:
+                            if self.logger:
+                                self.logger.log_warning(f"Stuck detected: Already tried clicking '{target}', instructing to try alternatives")
+                            # Mark as stuck in history so AI knows to try something else
+                            history_for_ai.append({
+                                "step": step_index,
+                                "stuck_detected": True,
+                                "already_tried": target,
+                                "message": f"Already clicked '{target}' before with no progress. Try a different element."
+                            })
+                        else:
+                            tried_targets.append(target)
+                    
+                    # Pass tried targets to mouse controller
+                    if hasattr(self.executor.mouse, '_tried_targets'):
+                        self.executor.mouse._tried_targets = tried_targets.copy()
+
+                result = self.executor.execute(command)
+                step_entry = {
+                    "step": step_index,
+                    "reasoning": agent_response.reasoning,
+                    "description": self.ai_agent.explain_command(command),
+                    "command": {
+                        "type": command.command_type.value,
+                        "action": command.action.value,
+                        "parameters": dict(command.parameters) if isinstance(command.parameters, dict) else command.parameters
+                    },
+                    "result": result.message,
+                    "success": result.success,
+                    "screenshot": screenshot_path
+                }
+                steps_output.append(step_entry)
+
+                history_for_ai.append({
+                    "step": step_index,
+                    "command_type": command.command_type.value,
+                    "action": command.action.value,
+                    "parameters": dict(command.parameters) if isinstance(command.parameters, dict) else command.parameters,
+                    "result": result.message,
+                    "success": result.success,
+                    "reasoning": agent_response.reasoning
+                })
+
+                if not result.success:
+                    data = {
+                        "mode": "agent",
+                        "status": "failed",
+                        "steps": steps_output,
+                        "goal": text,
+                        "total_steps": len(steps_output)
+                    }
+                    failure_message = f"{agent_response.reasoning}\n{result.message}"
+                    return False, build_summary(failure_message), data
+
+                if step_delay > 0:
+                    await asyncio.sleep(step_delay)
+
+            data = {
+                "mode": "agent",
+                "status": "failed",
+                "steps": steps_output,
+                "goal": text,
+                "total_steps": len(steps_output)
+            }
+            timeout_message = f"Agent reached the maximum of {max_steps} steps without completing the goal."
+            return False, build_summary(timeout_message), data
+
+        except Exception as e:
+            self.logger.log_error(f"Agent mode error: {e}")
+            data = {
+                "mode": "agent",
+                "status": "failed",
+                "steps": steps_output,
+                "goal": text,
+                "total_steps": len(steps_output)
+            }
+            return False, build_summary(f"Agent mode encountered an error: {e}"), data
 
     def _take_screenshot(self) -> Optional[str]:
         try:
