@@ -1,3 +1,13 @@
+import {
+  getScripts,
+  getScript,
+  createScript as createScriptDB,
+  updateScript as updateScriptDB,
+  deleteScript as deleteScriptDB,
+  searchScripts,
+  incrementScriptUsage,
+} from '@/lib/scriptService';
+
 let settingsStore = [];
 let settingsIdCounter = 1;
 
@@ -181,19 +191,20 @@ let scriptIdCounter = 1;
 
 export class Script {
   constructor(data = {}) {
+    // Handle both database format (snake_case) and class format (camelCase)
     this.id = data.id || scriptIdCounter++;
     this.name = data.name || 'Untitled Script';
     this.prompt = data.prompt || data.description || '';
     this.description = data.description || data.prompt || '';
     this.commands = data.commands || [];
     this.category = data.category || 'General';
-    this.isActive = data.isActive !== undefined ? data.isActive : true;
-    this.isFavorite = data.isFavorite !== undefined ? data.isFavorite : false;
-    this.created_date = data.created_date || data.createdAt || new Date().toISOString();
-    this.updated_date = data.updated_date || data.updatedAt || new Date().toISOString();
+    this.isActive = data.isActive !== undefined ? data.isActive : (data.is_active !== undefined ? data.is_active : true);
+    this.isFavorite = data.isFavorite !== undefined ? data.isFavorite : (data.is_favorite !== undefined ? data.is_favorite : false);
+    this.created_date = data.created_date || data.createdAt || data.created_at || new Date().toISOString();
+    this.updated_date = data.updated_date || data.updatedAt || data.updated_at || new Date().toISOString();
     this.usage_count = data.usage_count || data.executionCount || 0;
     this.executionCount = data.executionCount || data.usage_count || 0;
-    this.lastExecuted = data.lastExecuted || null;
+    this.lastExecuted = data.lastExecuted || data.last_executed || null;
 
     this.is_recurring = data.is_recurring || false;
     this.recurring_interval = data.recurring_interval || null;
@@ -219,16 +230,26 @@ export class Script {
     return this;
   }
 
-  async execute(axelaAPI) {
+  async execute(axelaAPI, userId = null) {
     this.executionCount++;
     this.usage_count = this.executionCount;
     this.lastExecuted = new Date().toISOString();
     this.updated_date = new Date().toISOString();
 
+    // Update usage in database if userId is provided
+    if (userId && this.id) {
+      try {
+        await incrementScriptUsage(this.id);
+      } catch (error) {
+        console.error('Error updating script usage in database:', error);
+      }
+    }
+
     const results = [];
 
     for (const command of this.commands) {
-      if (!command.isEnabled) continue;
+      if (!command.isEnabled && command.isEnabled !== undefined) continue;
+      if (command.is_enabled === false) continue;
 
       try {
         const result = await axelaAPI.executeCommand(command.text);
@@ -257,55 +278,79 @@ export class Script {
     };
   }
 
-  static async list(sortBy = '-created_date') {
+  static async list(userId, sortBy = '-created_date') {
+    if (!userId) {
+      console.error('Error fetching scripts: userId is required');
+      return [];
+    }
+
     try {
-      const response = await fetch(`http://127.0.0.1:8000/scripts?sort_by=${sortBy}`, {
-        cache: 'no-store'
+      // Map sortBy format: '-created_date' -> '-created_at' for database
+      const dbSortBy = sortBy.replace('created_date', 'created_at').replace('updated_date', 'updated_at');
+      const { data, error } = await getScripts(userId, dbSortBy);
+
+      if (error) {
+        throw error;
+      }
+
+      if (!data) {
+        return [];
+      }
+
+      // Transform database format to Script class format
+      return data.map(scriptData => {
+        const script = new Script({
+          ...scriptData,
+          created_date: scriptData.created_at,
+          updated_date: scriptData.updated_at,
+          isActive: scriptData.is_active,
+          isFavorite: scriptData.is_favorite,
+          lastExecuted: scriptData.last_executed,
+        });
+        return script;
       });
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      const result = await response.json();
-      if (result.success) {
-        return result.scripts.map(scriptData => new Script(scriptData));
-      } else {
-        throw new Error(result.message || 'Failed to fetch scripts');
-      }
     } catch (error) {
       console.error('Error fetching scripts:', error);
       return [];
     }
   }
 
-  static async create(data) {
+  static async create(userId, data) {
+    if (!userId) {
+      throw new Error('userId is required to create a script');
+    }
+
     try {
-      const response = await fetch('http://127.0.0.1:8000/scripts', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: data.name,
-          prompt: data.prompt,
-          description: data.description || '',
-          category: data.category || 'General',
-          is_recurring: data.is_recurring || false,
-          recurring_interval: data.recurring_interval || null,
-          recurring_enabled: data.recurring_enabled || false,
-          commands: data.commands || []
-        })
+      const { data: scriptData, error } = await createScriptDB(userId, {
+        name: data.name,
+        prompt: data.prompt,
+        description: data.description || '',
+        category: data.category || 'General',
+        is_recurring: data.is_recurring || false,
+        recurring_interval: data.recurring_interval || null,
+        recurring_enabled: data.recurring_enabled || false,
+        is_active: data.isActive !== undefined ? data.isActive : true,
+        is_favorite: data.isFavorite !== undefined ? data.isFavorite : false,
+        commands: data.commands || []
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      if (error) {
+        throw error;
       }
 
-      const result = await response.json();
-      if (result.success) {
-        return new Script(result.script);
-      } else {
-        throw new Error(result.message || 'Failed to create script');
+      if (!scriptData) {
+        throw new Error('Failed to create script');
       }
+
+      // Transform database format to Script class format
+      return new Script({
+        ...scriptData,
+        created_date: scriptData.created_at,
+        updated_date: scriptData.updated_at,
+        isActive: scriptData.is_active,
+        isFavorite: scriptData.is_favorite,
+        lastExecuted: scriptData.last_executed,
+      });
     } catch (error) {
       console.error('Error creating script:', error);
       throw error;
@@ -314,24 +359,52 @@ export class Script {
 
   static async update(id, data) {
     try {
-      const response = await fetch(`http://127.0.0.1:8000/scripts/${id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data)
+      // Transform camelCase to snake_case for database
+      const updateData = { ...data };
+      if (data.isActive !== undefined) {
+        updateData.isActive = data.isActive;
+      }
+      if (data.isFavorite !== undefined) {
+        updateData.isFavorite = data.isFavorite;
+      }
+      if (data.isRecurring !== undefined) {
+        updateData.isRecurring = data.isRecurring;
+      }
+      if (data.recurringInterval !== undefined) {
+        updateData.recurringInterval = data.recurringInterval;
+      }
+      if (data.recurringEnabled !== undefined) {
+        updateData.recurringEnabled = data.recurringEnabled;
+      }
+      if (data.usageCount !== undefined) {
+        updateData.usageCount = data.usageCount;
+      }
+      if (data.lastExecuted !== undefined) {
+        updateData.lastExecuted = data.lastExecuted;
+      }
+      if (data.nextExecution !== undefined) {
+        updateData.nextExecution = data.nextExecution;
+      }
+
+      const { data: scriptData, error } = await updateScriptDB(id, updateData);
+
+      if (error) {
+        throw error;
+      }
+
+      if (!scriptData) {
+        throw new Error('Failed to update script');
+      }
+
+      // Transform database format to Script class format
+      return new Script({
+        ...scriptData,
+        created_date: scriptData.created_at,
+        updated_date: scriptData.updated_at,
+        isActive: scriptData.is_active,
+        isFavorite: scriptData.is_favorite,
+        lastExecuted: scriptData.last_executed,
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const result = await response.json();
-      if (result.success) {
-        return new Script(result.script);
-      } else {
-        throw new Error(result.message || 'Failed to update script');
-      }
     } catch (error) {
       console.error('Error updating script:', error);
       throw error;
@@ -340,16 +413,13 @@ export class Script {
 
   static async delete(id) {
     try {
-      const response = await fetch(`http://127.0.0.1:8000/scripts/${id}`, {
-        method: 'DELETE'
-      });
+      const { error } = await deleteScriptDB(id);
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      if (error) {
+        throw error;
       }
 
-      const result = await response.json();
-      return result.success;
+      return true;
     } catch (error) {
       console.error('Error deleting script:', error);
       throw error;
@@ -378,18 +448,34 @@ export class Script {
     }
   }
 
-  static async search(query) {
+  static async search(userId, query) {
+    if (!userId) {
+      console.error('Error searching scripts: userId is required');
+      return [];
+    }
+
     try {
-      const response = await fetch(`http://127.0.0.1:8000/scripts/search?q=${encodeURIComponent(query)}`);
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      const { data, error } = await searchScripts(userId, query);
+
+      if (error) {
+        throw error;
       }
-      const result = await response.json();
-      if (result.success) {
-        return result.scripts.map(scriptData => new Script(scriptData));
-      } else {
-        throw new Error(result.message || 'Failed to search scripts');
+
+      if (!data) {
+        return [];
       }
+
+      // Transform database format to Script class format
+      return data.map(scriptData => {
+        return new Script({
+          ...scriptData,
+          created_date: scriptData.created_at,
+          updated_date: scriptData.updated_at,
+          isActive: scriptData.is_active,
+          isFavorite: scriptData.is_favorite,
+          lastExecuted: scriptData.last_executed,
+        });
+      });
     } catch (error) {
       console.error('Error searching scripts:', error);
       return [];
@@ -416,24 +502,28 @@ export class Script {
 
   static async enableRecurring(id, interval) {
     try {
-      const response = await fetch(`http://127.0.0.1:8000/scripts/${id}/recurring/enable`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ interval })
+      const { data: scriptData, error } = await updateScriptDB(id, {
+        isRecurring: true,
+        recurringInterval: interval,
+        recurringEnabled: true,
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      if (error) {
+        throw error;
       }
 
-      const result = await response.json();
-      if (result.success) {
-        return new Script(result.script);
-      } else {
-        throw new Error(result.message || 'Failed to enable recurring');
+      if (!scriptData) {
+        throw new Error('Failed to enable recurring');
       }
+
+      return new Script({
+        ...scriptData,
+        created_date: scriptData.created_at,
+        updated_date: scriptData.updated_at,
+        isActive: scriptData.is_active,
+        isFavorite: scriptData.is_favorite,
+        lastExecuted: scriptData.last_executed,
+      });
     } catch (error) {
       console.error('Error enabling recurring:', error);
       throw error;
@@ -442,51 +532,87 @@ export class Script {
 
   static async disableRecurring(id) {
     try {
-      const response = await fetch(`http://127.0.0.1:8000/scripts/${id}/recurring/disable`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        }
+      const { data: scriptData, error } = await updateScriptDB(id, {
+        recurringEnabled: false,
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      if (error) {
+        throw error;
       }
 
-      const result = await response.json();
-      if (result.success) {
-        return new Script(result.script);
-      } else {
-        throw new Error(result.message || 'Failed to disable recurring');
+      if (!scriptData) {
+        throw new Error('Failed to disable recurring');
       }
+
+      return new Script({
+        ...scriptData,
+        created_date: scriptData.created_at,
+        updated_date: scriptData.updated_at,
+        isActive: scriptData.is_active,
+        isFavorite: scriptData.is_favorite,
+        lastExecuted: scriptData.last_executed,
+      });
     } catch (error) {
       console.error('Error disabling recurring:', error);
       throw error;
     }
   }
 
-  static async getRecurringScripts() {
+  static async getRecurringScripts(userId) {
+    if (!userId) {
+      console.error('Error getting recurring scripts: userId is required');
+      return [];
+    }
+
     try {
-      const response = await fetch('http://127.0.0.1:8000/scripts/recurring');
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      const { data, error } = await getScripts(userId, '-created_at');
+
+      if (error) {
+        throw error;
       }
-      const result = await response.json();
-      return result.scripts.map(script => new Script(script));
+
+      if (!data) {
+        return [];
+      }
+
+      // Filter for recurring scripts
+      const recurring = data.filter(s => s.is_recurring && s.recurring_enabled);
+
+      return recurring.map(scriptData => {
+        return new Script({
+          ...scriptData,
+          created_date: scriptData.created_at,
+          updated_date: scriptData.updated_at,
+          isActive: scriptData.is_active,
+          isFavorite: scriptData.is_favorite,
+          lastExecuted: scriptData.last_executed,
+        });
+      });
     } catch (error) {
       console.error('Error getting recurring scripts:', error);
       return [];
     }
   }
 
-  static async getDueScripts() {
+  static async getDueScripts(userId) {
+    if (!userId) {
+      console.error('Error getting due scripts: userId is required');
+      return [];
+    }
+
     try {
-      const response = await fetch('http://127.0.0.1:8000/scripts/recurring/due');
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      const result = await response.json();
-      return result.scripts.map(script => new Script(script));
+      const recurring = await this.getRecurringScripts(userId);
+      const now = new Date();
+
+      return recurring.filter(script => {
+        if (!script.next_execution) return false;
+        try {
+          const nextExec = new Date(script.next_execution);
+          return now >= nextExec;
+        } catch {
+          return false;
+        }
+      });
     } catch (error) {
       console.error('Error getting due scripts:', error);
       return [];
