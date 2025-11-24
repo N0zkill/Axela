@@ -28,6 +28,7 @@ export default function AssistantPage() {
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
   const messagesEndRef = useRef(null);
   const chatInputRef = useRef(null);
+  const sendMessageRef = useRef(null);
 
   const axelaAPI = useAxelaAPI();
   const { user } = useAuth();
@@ -204,8 +205,35 @@ export default function AssistantPage() {
     };
   }, [user]); // Include user in dependencies
 
+  // Keep sendMessage ref up to date
+  useEffect(() => {
+    sendMessageRef.current = sendMessage;
+  });
+
+  // Listen for commands from overlay window
+  useEffect(() => {
+    if (window.electronAPI?.onOverlayCommand) {
+      const cleanup = window.electronAPI.onOverlayCommand((command) => {
+        console.log('Received command from overlay:', command);
+        // Use the ref to always call the latest version of sendMessage
+        if (sendMessageRef.current) {
+          sendMessageRef.current(command);
+        }
+      });
+
+      return cleanup;
+    }
+  }, []); // Only set up once - ref pattern handles stale closures
+
   useEffect(() => {
     scrollToBottom();
+    
+    // Send chat update to Electron for overlay
+    if (window.electronAPI?.sendChatUpdate && currentConversation) {
+      window.electronAPI.sendChatUpdate({
+        messages: currentConversation.messages || []
+      });
+    }
   }, [currentConversation?.messages]);
 
   const scrollToBottom = () => {

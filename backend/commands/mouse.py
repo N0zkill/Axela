@@ -187,6 +187,36 @@ class MouseController:
                             print(f"Found {len(elements)} fuzzy matches")
                         
                         if elements:
+                            best_text_match = elements[0]
+                            
+                            # intelligent click adjustment: check for visual elements (icons/images) above the text
+                            try:
+                                visual_elements = finder.find_visual_elements(screenshot_path)
+                                if visual_elements:
+                                    text_center_x, text_center_y = best_text_match.coordinates
+                                    
+                                    best_visual_match = None
+                                    min_dist = float('inf')
+                                    
+                                    for visual in visual_elements:
+                                        vis_x, vis_y = visual.coordinates
+                                        
+                                        # Check horizontal alignment (strict)
+                                        if abs(vis_x - text_center_x) < 60:
+                                            # Check if visual is ABOVE text (within 150px)
+                                            # text_y > vis_y means visual is higher (screen coords start top-left)
+                                            if 10 < (text_center_y - vis_y) < 180:
+                                                dist = ((vis_x - text_center_x)**2 + (vis_y - text_center_y)**2)**0.5
+                                                if dist < min_dist:
+                                                    min_dist = dist
+                                                    best_visual_match = visual
+                                    
+                                    if best_visual_match:
+                                        print(f"Found visual element above text '{best_text_match.text}': clicking visual at {best_visual_match.coordinates}")
+                                        return best_visual_match.coordinates
+                            except Exception as ve:
+                                print(f"Visual element search failed (using text target): {ve}")
+
                             print(f"Best match: '{elements[0].text}' at {elements[0].coordinates} (confidence: {elements[0].confidence})")
                             # Show all matches if multiple found
                             if len(elements) > 1:

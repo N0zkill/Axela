@@ -213,22 +213,31 @@ Example 3 (Keyboard command):
 }
 
 CRITICAL FOR MOUSE COMMANDS:
-You have TWO options for mouse commands:
+You have THREE options for mouse commands:
 
-OPTION 1 - Text-based targeting (PREFERRED when possible):
+OPTION 1 - Visual coordinate targeting (PREFERRED for images/icons/buttons):
+- When you see a screenshot, analyze it visually to identify clickable elements
+- For images, icons, buttons, OR elements with both an image and text (like document templates, app icons): Use {"x": 150, "y": 300}
+- Look for visual cues: button shapes, icons, clickable areas, highlighted elements
+- Provide exact pixel coordinates based on what you see in the screenshot
+- This is the ONLY way to click on images/icons
+
+OPTION 2 - Text-based targeting (for text-only elements):
 - Use {"target": "actual text you see"} - specify the EXACT text visible on screen
-- For search results: {"target": "The visible title or URL text"}
-- For buttons: {"target": "Submit"}, {"target": "Login"}, {"target": "Search"}
-- For links: {"target": "Learn more"}, {"target": "Read article"}
 - This uses OCR to find the exact text and click it
+- Only use this when the element is primarily text (like a link or menu item)
 
-OPTION 2 - Coordinate-based targeting (fallback):
+OPTION 3 - Coordinate-based targeting (fallback):
 - Use exact coordinates: {"x": 150, "y": 300}
-- Only when text-based targeting won't work
-- When you see a screenshot, analyze it and provide specific pixel coordinates
+- When text-based targeting won't work
 - Click coordinates should be in the center of clickable elements
 
-PREFER text-based targeting as it's much more reliable than coordinates!
+PRIORITY ORDER:
+1. If the element is an Image, Icon, or Tile (even if it has a text label) → Use coordinates (OPTION 1) to click the IMAGE part.
+2. If the element is purely Text (like a hyperlink) → Use text target (OPTION 2)
+3. Otherwise → Use coordinates (OPTION 3)
+
+PREFER visual coordinates for anything that looks like a button, icon, or thumbnail!
 
 CRITICAL: YOUR ENTIRE RESPONSE MUST BE VALID JSON. DO NOT INCLUDE ANY TEXT BEFORE OR AFTER THE JSON.
 
@@ -479,6 +488,10 @@ Never use markdown in your responses. You can use bullet points such as - and nu
         self.temperature = max(0.0, min(1.0, temperature))
         if self.logger:
             self.logger.log_info(f"AI temperature set to: {self.temperature}")
+
+    def process_request(self, user_input: str, context: Optional[Dict] = None) -> AIResponse:
+        """Legacy alias for process_with_visual_context without screenshot"""
+        return self.process_with_visual_context(user_input, None, context)
 
     def process_with_visual_context(self, user_input: str, screenshot_path: Optional[str] = None, context: Optional[Dict] = None) -> AIResponse:
         if not self.client:

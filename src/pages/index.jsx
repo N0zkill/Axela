@@ -3,6 +3,7 @@ import Layout from "./Layout.jsx";
 import Assistant from "./Assistant";
 import SignIn from "./SignIn";
 import SignUp from "./SignUp";
+import Overlay from "./Overlay";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -59,6 +60,7 @@ function PagesContent() {
             {/* Public routes */}
             <Route path="/signin" element={<SignIn />} />
             <Route path="/signup" element={<SignUp />} />
+            <Route path="/overlay" element={<Overlay />} />
             
             {/* Protected routes */}
             <Route 

@@ -142,6 +142,53 @@ class SmartElementFinder:
 
         return elements
 
+    def find_visual_elements(self, image_path: str) -> List[FoundElement]:
+        """Detect clickable UI elements using computer vision (buttons, icons, etc.)"""
+        elements = []
+        
+        try:
+            img = cv2.imread(image_path)
+            if img is None:
+                return elements
+                
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            
+            # Detect rectangular button-like shapes using adaptive thresholding and contour detection
+            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+            thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+            
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                # Filter by size (typical button/icon/card size)
+                # Min area 400 (20x20 icon), Max area 100000 (large card/modal)
+                if 400 < area < 100000:
+                    x, y, w, h = cv2.boundingRect(contour)
+                    aspect_ratio = w / float(h)
+                    
+                    # Filter shapes that are too thin or too wide to be buttons/cards
+                    if 0.2 < aspect_ratio < 10.0:
+                        center_x = x + w // 2
+                        center_y = y + h // 2
+                        
+                        element = FoundElement(
+                            text="",  # No text for pure visual elements
+                            confidence=0.6,  # Base confidence for visual detection
+                            coordinates=(center_x, center_y),
+                            bounding_box=(x, y, w, h),
+                            element_type='visual_element'
+                        )
+                        elements.append(element)
+                        
+            elements.sort(key=lambda x: (x.coordinates[1], x.coordinates[0]))
+                        
+        except Exception as e:
+            if self.logger:
+                self.logger.log_error(f"Error finding visual elements: {e}")
+        
+        return elements
+
     def _find_with_easyocr(self, image_path: str, target_text: str, fuzzy_match: bool) -> List[FoundElement]:
         elements = []
 

@@ -14,6 +14,47 @@ class AxelaDesktop {
     this.isRestarting = false;
     this.registeredHotkeys = new Set();
     this.tray = null;
+    this.overlayWindow = null;
+  }
+
+  createOverlayWindow() {
+    if (this.overlayWindow) return;
+
+    const { width, height } = require('electron').screen.getPrimaryDisplay().workAreaSize;
+
+    this.overlayWindow = new BrowserWindow({
+      width: 350,
+      height: 400,
+      x: width - 370,
+      y: height - 420,
+      frame: false,
+      transparent: true,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: true,
+      show: false,
+      hasShadow: false,
+      backgroundColor: '#00000000',
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        enableRemoteModule: false,
+        preload: path.join(__dirname, 'preload.js')
+      }
+    });
+
+    const startUrl = isDev
+      ? 'http://localhost:5173/overlay'
+      : `file://${path.join(__dirname, '../dist/index.html')}#/overlay`;
+
+    this.overlayWindow.loadURL(startUrl);
+
+    this.overlayWindow.on('closed', () => {
+      this.overlayWindow = null;
+    });
+    
+    // Ensure clicks pass through when transparent (optional, but good for overlay)
+    // For now, we want it clickable/draggable, so we don't ignore mouse events globally
   }
 
   createWindow() {
@@ -121,6 +162,7 @@ class AxelaDesktop {
           if (this.mainWindow) {
             this.mainWindow.show();
             this.mainWindow.focus();
+            if (this.overlayWindow) this.overlayWindow.hide();
           }
         }
       },
@@ -129,6 +171,7 @@ class AxelaDesktop {
         click: () => {
           if (this.mainWindow) {
             this.mainWindow.hide();
+            if (this.overlayWindow) this.overlayWindow.show();
           }
         }
       },
@@ -150,9 +193,11 @@ class AxelaDesktop {
       if (this.mainWindow) {
         if (this.mainWindow.isVisible()) {
           this.mainWindow.hide();
+          if (this.overlayWindow) this.overlayWindow.show();
         } else {
           this.mainWindow.show();
           this.mainWindow.focus();
+          if (this.overlayWindow) this.overlayWindow.hide();
         }
       }
     });
@@ -162,9 +207,11 @@ class AxelaDesktop {
       if (this.mainWindow) {
         if (this.mainWindow.isVisible()) {
           this.mainWindow.hide();
+          if (this.overlayWindow) this.overlayWindow.show();
         } else {
           this.mainWindow.show();
           this.mainWindow.focus();
+          if (this.overlayWindow) this.overlayWindow.hide();
         }
       }
     });
@@ -450,6 +497,19 @@ class AxelaDesktop {
     ipcMain.handle('is-backend-restarting', () => {
       return this.isRestarting;
     });
+
+    ipcMain.on('chat-update-from-renderer', (event, data) => {
+      if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
+        this.overlayWindow.webContents.send('chat-update', data);
+      }
+    });
+
+    // Handle commands from overlay - forward to main window
+    ipcMain.on('overlay-command', (event, command) => {
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.webContents.send('execute-overlay-command', command);
+      }
+    });
   }
 }
 
@@ -457,6 +517,7 @@ const axelaDesktop = new AxelaDesktop();
 
 app.whenReady().then(() => {
   axelaDesktop.createWindow();
+  axelaDesktop.createOverlayWindow();
   axelaDesktop.createTray();
   axelaDesktop.setupIPC();
   axelaDesktop.startPythonBackend();

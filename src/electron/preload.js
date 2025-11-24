@@ -26,6 +26,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onHotkeyPressed: (callback) => {
     ipcRenderer.on('hotkey-pressed', (event, hotkey) => callback(hotkey));
   },
+  onChatUpdate: (callback) => {
+    const subscription = (event, data) => callback(data);
+    ipcRenderer.on('chat-update', subscription);
+    return () => ipcRenderer.removeListener('chat-update', subscription);
+  },
+  sendChatUpdate: (data) => ipcRenderer.send('chat-update-from-renderer', data),
+  
+  // Overlay command handling
+  sendOverlayCommand: (command) => ipcRenderer.send('overlay-command', command),
+  onOverlayCommand: (callback) => {
+    const subscription = (event, command) => callback(command);
+    ipcRenderer.on('execute-overlay-command', subscription);
+    return () => ipcRenderer.removeListener('execute-overlay-command', subscription);
+  },
 
   removeAllListeners: (channel) => {
     ipcRenderer.removeAllListeners(channel);
