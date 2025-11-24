@@ -20,9 +20,21 @@ export default function SettingsPanel({ axelaAPI }) {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [availableVoices, setAvailableVoices] = useState([]);
   const [availableMicrophones, setAvailableMicrophones] = useState([]);
+  const [startupSettings, setStartupSettings] = useState({ launchAtStartup: false, startInOverlayMode: false });
   const navigate = useNavigate();
   const { signOut, user } = useAuth();
   const { toast } = useToast();
+
+  const loadStartupSettings = async () => {
+    if (window.electronAPI?.getStartupSettings) {
+      try {
+        const settings = await window.electronAPI.getStartupSettings();
+        setStartupSettings(settings);
+      } catch (error) {
+        console.error("Error loading startup settings:", error);
+      }
+    }
+  };
 
   const loadVoices = async () => {
     try {
@@ -74,6 +86,7 @@ export default function SettingsPanel({ axelaAPI }) {
   useEffect(() => {
     loadConfig();
     loadMicrophones();
+    loadStartupSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -93,7 +106,7 @@ export default function SettingsPanel({ axelaAPI }) {
       // Save each section that has changes
       const sections = ['mode', 'voice', 'security', 'performance', 'hotkeys', 'custom'];
       const changedSections = []; // Track which sections actually changed
-      
+
       for (const section of sections) {
         if (section === 'mode') {
           // Handle mode separately as it's in custom settings
@@ -115,6 +128,11 @@ export default function SettingsPanel({ axelaAPI }) {
         }
       }
 
+      // Save startup settings
+      if (window.electronAPI?.setStartupSettings) {
+        await window.electronAPI.setStartupSettings(startupSettings);
+      }
+
       // Reload config to ensure sync
       await loadConfig();
 
@@ -131,7 +149,7 @@ export default function SettingsPanel({ axelaAPI }) {
           detail: change
         }));
       }
-      
+
     } catch (error) {
       console.error('Error saving settings:', error);
     } finally {
@@ -585,6 +603,49 @@ export default function SettingsPanel({ axelaAPI }) {
           </Card>
         </motion.div>
 
+        {/* Custom Settings */}
+        <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.5 }}>
+          <Card className="bg-stone-900/50 border-stone-800/50 h-full">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-white">
+                <Zap className="w-5 h-5 text-orange-400" />
+                Startup & System
+              </CardTitle>
+              <CardDescription className="text-stone-400">
+                Configure startup behavior
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-stone-200">Launch at Startup</Label>
+                  <p className="text-xs text-stone-500">Start AXELA when your computer starts</p>
+                </div>
+                <Switch
+                  checked={startupSettings.launchAtStartup}
+                  onCheckedChange={(checked) => {
+                    setStartupSettings(prev => ({ ...prev, launchAtStartup: checked }));
+                    setHasUnsavedChanges(true);
+                  }}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-stone-200">Start in Overlay Mode</Label>
+                  <p className="text-xs text-stone-500">Launch with main window hidden</p>
+                </div>
+                <Switch
+                  checked={startupSettings.startInOverlayMode}
+                  onCheckedChange={(checked) => {
+                    setStartupSettings(prev => ({ ...prev, startInOverlayMode: checked }));
+                    setHasUnsavedChanges(true);
+                  }}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
         {/* Hotkeys Settings */}
         <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.5 }}>
           <Card className="bg-stone-900/50 border-stone-800/50 h-full">
@@ -653,8 +714,8 @@ export default function SettingsPanel({ axelaAPI }) {
           onClick={saveAllChanges}
           disabled={saving || !hasUnsavedChanges}
           className={`${
-            hasUnsavedChanges 
-              ? 'bg-orange-500 hover:bg-orange-600' 
+            hasUnsavedChanges
+              ? 'bg-orange-500 hover:bg-orange-600'
               : 'bg-stone-700'
           } text-white shadow-lg ${hasUnsavedChanges ? 'shadow-orange-500/20' : ''} border-0 px-8 h-11`}
         >

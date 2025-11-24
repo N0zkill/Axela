@@ -52,12 +52,15 @@ class AxelaDesktop {
     this.overlayWindow.on('closed', () => {
       this.overlayWindow = null;
     });
-    
+
     // Ensure clicks pass through when transparent (optional, but good for overlay)
     // For now, we want it clickable/draggable, so we don't ignore mouse events globally
   }
 
   createWindow() {
+    const iconPath = path.join(__dirname, '../assets/logo_white.png');
+    let appIcon = nativeImage.createFromPath(iconPath);
+    appIcon = appIcon.resize({ width: 256, height: 256 });
     this.mainWindow = new BrowserWindow({
       width: 1200,
       height: 800,
@@ -69,7 +72,7 @@ class AxelaDesktop {
         enableRemoteModule: false,
         preload: path.join(__dirname, 'preload.js')
       },
-      icon: path.join(__dirname, '../assets/icon.png'),
+      icon: appIcon,
       titleBarStyle: 'default',
       show: false
     });
@@ -114,12 +117,28 @@ class AxelaDesktop {
 
     console.log('Starting Python backend:', pythonPath);
 
+    const userDataPath = app.getPath('userData');
+    const configPath = path.join(userDataPath, 'config.json');
+
+    const env = {
+      ...process.env,
+      AXELA_DATA_DIR: userDataPath,
+      PYTHONUNBUFFERED: '1'
+    };
+
     // Use 'py' on Windows, 'python3' on others
     const pythonCommand = process.platform === 'win32' ? 'py' : 'python3';
 
-    this.pythonProcess = spawn(pythonCommand, [pythonPath, '--api-mode', '--host', '127.0.0.1', '--port', '8000'], {
+    this.pythonProcess = spawn(pythonCommand, [
+      pythonPath,
+      '--api-mode',
+      '--host', '127.0.0.1',
+      '--port', '8000',
+      '--config', configPath
+    ], {
       cwd: path.dirname(pythonPath),
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: env
     });
 
     this.pythonProcess.stdout.on('data', (data) => {
@@ -150,11 +169,22 @@ class AxelaDesktop {
   }
 
   createTray() {
-    // Create a simple tray icon
-    const icon = nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAIDSURBVFhH7ZbPK0RRGMXfmzGTH0mhLCRlY2Oj/AFsbCwsLCz8A2zs/ANsbP0BNhY2FhYWioWFhZKFhYWFhR/JjzLMvE/nO3Pfa+69782beRs+9U7de+ec7517752ZJP+peDxuYRiGYRiGYf4ner0eHA6Hg16vB6vVCpPJBJPJBKvVCh6PB263Gw6HQxOJRCKQyWQgl8tZr9erCYfDkMlkkEqlrFarJRKJhCWTSSiVSiiVStZqtUQikbBkMgmFQgGFQsHa7bZIJBKWTCYhk8kgl8tBrVajWq2yZrMpEolEIpGI1Ot1qFQqKJVK1mg0RCKRSCQSiUQ8Ho/b7XY4nU44nU643W54vV54PB5YrVaYzWaYTCYYDAbo9XrodDrodDpoNBqo1WpQqVRQKBRQKBSQy+WQy+Ugk8lAJpOBVCoFqVQKUqkUJBIJSCQSkEgkIBaLQSwWg0gkApFIBEKhEIRCIQiFQhAIBCAQCEAgEAC/3w98Ph/4fD7w+Xzg8/nA5/OBz+cDj8cDHo8HXC4XuFwucLlc4HK5wOVygcvlApfLBS6XC1wuF7hcLnC5XOByucDhcIDD4QCHwwEOhwMcDgfYbDaw2WxgsVjAYrGAxWIBi8UCFosFLBYLWCwWMJlMYDKZwGQygclkApPJBCaTCUwmE5hMJjAYDGAwGMBgMIDBYACDwQAGgwF0Oh3odDrQ6XSg0+lAo9GARqMBjUYDarU6Sfp/JQB8A+vO/NfPAAAAAElFTkSuQmCC');
-    
-    this.tray = new Tray(icon.resize({ width: 16, height: 16 }));
-    
+    const iconPath = path.join(__dirname, '../assets/logo_white.png');
+    let icon = nativeImage.createFromPath(iconPath);
+
+    const size = icon.getSize();
+    if (size.width > 0) {
+      const cropRatio = 0.6;
+      const cropWidth = Math.floor(size.width * cropRatio);
+      const cropHeight = Math.floor(size.height * cropRatio);
+      const x = Math.floor((size.width - cropWidth) / 2);
+      const y = Math.floor((size.height - cropHeight) / 2);
+
+      icon = icon.crop({ x, y, width: cropWidth, height: cropHeight });
+    }
+
+    this.tray = new Tray(icon.resize({ width: 22, height: 22 }));
+
     const contextMenu = Menu.buildFromTemplate([
       {
         label: 'Show AXELA',
@@ -184,10 +214,10 @@ class AxelaDesktop {
         }
       }
     ]);
-    
+
     this.tray.setToolTip('AXELA - AI Assistant (Click to show/hide)');
     this.tray.setContextMenu(contextMenu);
-    
+
     // Single click to show/hide
     this.tray.on('click', () => {
       if (this.mainWindow) {
@@ -201,7 +231,7 @@ class AxelaDesktop {
         }
       }
     });
-    
+
     // Double click also works
     this.tray.on('double-click', () => {
       if (this.mainWindow) {
@@ -226,11 +256,11 @@ class AxelaDesktop {
 
       request.on('response', (response) => {
         let data = '';
-        
+
         response.on('data', (chunk) => {
           data += chunk.toString();
         });
-        
+
         response.on('end', () => {
           try {
             const config = JSON.parse(data);
@@ -310,14 +340,14 @@ class AxelaDesktop {
         try {
           const registered = globalShortcut.register(accelerator, () => {
             console.log('🚨 EMERGENCY STOP TRIGGERED! 🚨');
-            
+
             // Set restarting flag
             this.isRestarting = true;
-            
+
             // Kill the Python backend process
             if (this.pythonProcess && this.pythonProcess.pid) {
               console.log(`Killing Python backend process (PID: ${this.pythonProcess.pid})...`);
-              
+
               try {
                 if (process.platform === 'win32') {
                   // On Windows, use taskkill to force terminate
@@ -351,7 +381,7 @@ class AxelaDesktop {
                     }, 2000);
                   }, 2000);
                 }
-                
+
                 this.pythonProcess = null;
               } catch (error) {
                 console.error('Error during emergency stop:', error);
@@ -361,7 +391,7 @@ class AxelaDesktop {
               console.log('No Python process to kill');
               this.isRestarting = false;
             }
-            
+
             // Notify the UI
             if (this.mainWindow) {
               this.mainWindow.webContents.send('hotkey-pressed', 'emergency_stop');
@@ -382,7 +412,7 @@ class AxelaDesktop {
 
   normalizeAccelerator(hotkey) {
     if (!hotkey) return null;
-    
+
     // Convert to Electron's format
     return hotkey
       .split('+')
@@ -416,6 +446,36 @@ class AxelaDesktop {
 
     ipcMain.handle('set-setting', (event, key, value) => {
       store.set(key, value);
+
+      if (key === 'launchAtStartup') {
+        app.setLoginItemSettings({
+          openAtLogin: value,
+          path: app.getPath('exe')
+        });
+      }
+
+      return true;
+    });
+
+    ipcMain.handle('get-startup-settings', () => {
+      return {
+        launchAtStartup: app.getLoginItemSettings().openAtLogin,
+        startInOverlayMode: store.get('startInOverlayMode', false)
+      };
+    });
+
+    ipcMain.handle('set-startup-settings', (event, settings) => {
+      if (settings.launchAtStartup !== undefined) {
+        app.setLoginItemSettings({
+          openAtLogin: settings.launchAtStartup,
+          path: app.getPath('exe')
+        });
+      }
+
+      if (settings.startInOverlayMode !== undefined) {
+        store.set('startInOverlayMode', settings.startInOverlayMode);
+      }
+
       return true;
     });
 
@@ -521,6 +581,13 @@ app.whenReady().then(() => {
   axelaDesktop.createTray();
   axelaDesktop.setupIPC();
   axelaDesktop.startPythonBackend();
+
+  const startInOverlayMode = store.get('startInOverlayMode', false);
+  if (startInOverlayMode) {
+    if (axelaDesktop.mainWindow) {
+      axelaDesktop.mainWindow.hide();
+    }
+  }
 
   // Wait for backend to start, then load hotkeys
   setTimeout(() => {

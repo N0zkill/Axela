@@ -4,6 +4,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),
   setSetting: (key, value) => ipcRenderer.invoke('set-setting', key, value),
 
+  getStartupSettings: () => ipcRenderer.invoke('get-startup-settings'),
+  setStartupSettings: (settings) => ipcRenderer.invoke('set-startup-settings', settings),
+
   sendCommand: (command, mode) => ipcRenderer.invoke('send-command', command, mode),
 
   showOpenDialog: (options) => ipcRenderer.invoke('show-open-dialog', options),
@@ -32,7 +35,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('chat-update', subscription);
   },
   sendChatUpdate: (data) => ipcRenderer.send('chat-update-from-renderer', data),
-  
+
   // Overlay command handling
   sendOverlayCommand: (command) => ipcRenderer.send('overlay-command', command),
   onOverlayCommand: (callback) => {
