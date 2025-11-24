@@ -48,3 +48,4 @@ backend/screenshots/*.jpeg
 .DS_Store
 Thumbs.db
 
+dist-electron/
