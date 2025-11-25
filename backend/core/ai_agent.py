@@ -15,12 +15,21 @@ except ImportError:
 
 try:
     from dotenv import load_dotenv
-    # Load from project root (one level up from backend/)
-    env_path = Path(__file__).parent.parent.parent / '.env'
-    load_dotenv(env_path)
+    # Try multiple locations for .env file
+    import os
+    env_paths = [
+        Path(__file__).parent.parent.parent / '.env',  # Project root (dev)
+        Path(os.getenv('AXELA_DATA_DIR', '')) / '.env' if os.getenv('AXELA_DATA_DIR') else None,  # User AppData (prod)
+    ]
+    # Filter out None paths and try to load
+    env_paths = [p for p in env_paths if p is not None and p.exists()]
+    if env_paths:
+        load_dotenv(env_paths[0], override=False)  # Don't override existing env vars
     DOTENV_AVAILABLE = True
 except ImportError:
     DOTENV_AVAILABLE = False
+except Exception:
+    DOTENV_AVAILABLE = True  # dotenv is available, just couldn't load file (that's OK)
 
 try:
     import openai
@@ -79,15 +88,23 @@ class AIAgent:
         if not OPENAI_AVAILABLE:
             if self.logger:
                 self.logger.log_error("OpenAI library not available")
+            print("[ERROR] OpenAI library not available")
             return False
 
         api_key = os.getenv('OPENAI_API_KEY')
         if not api_key:
             if self.logger:
                 self.logger.log_error("OPENAI_API_KEY environment variable not set")
-            print("OPENAI_API_KEY environment variable not set")
-            print("Please set your OpenAI API key: set OPENAI_API_KEY=your_key_here")
+            print("[ERROR] OPENAI_API_KEY environment variable not set")
+            print("[INFO] Checking environment variables...")
+            print(f"[DEBUG] AXELA_DATA_DIR: {os.getenv('AXELA_DATA_DIR', 'NOT SET')}")
+            print(f"[DEBUG] All env vars with 'OPENAI': {[k for k in os.environ.keys() if 'OPENAI' in k]}")
+            print("Please set your OpenAI API key via electron-store or .env file")
             return False
+
+        # Log that we found the key (but don't log the actual key for security)
+        key_preview = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
+        print(f"[OK] OPENAI_API_KEY found (preview: {key_preview})")
 
         try:
             client_kwargs = {'api_key': api_key}
@@ -324,11 +341,11 @@ RESPOND ONLY WITH A VALID JSON OBJECT - NO OTHER TEXT. Follow the exact format s
     def _build_agent_prompt(self, user_goal: str, step_history: List[Dict[str, Any]]) -> str:
         history_text = "[]"
         stuck_warning = ""
-        
+
         if step_history:
             try:
                 history_text = json.dumps(step_history, indent=2)
-                
+
                 # Check if we detected stuck state in recent history
                 for entry in step_history[-3:]:  # Check last 3 steps
                     if entry.get("stuck_detected"):
@@ -759,7 +776,7 @@ AGENT MODE VISUAL ANALYSIS:
 
         user_lower = user_input.lower()
         import re
-        
+
         # Check if this is a COMPOUND command (navigation + action)
         # If so, DON'T take screenshot upfront - let AI generate sequence with screenshot in the middle
         compound_patterns = [
@@ -767,7 +784,7 @@ AGENT MODE VISUAL ANALYSIS:
             r'(open|go to|navigate).*and.*(click|select)',  # "go to X and click Y"
             r'(search|open).*then.*(click|select)',  # "search X then click Y"
         ]
-        
+
         for pattern in compound_patterns:
             if re.search(pattern, user_lower):
                 # This is a compound command - AI should generate screenshot in sequence
@@ -779,7 +796,7 @@ AGENT MODE VISUAL ANALYSIS:
             r'(current|this|visible)\s+(window|screen|page)',
             r'(what|where)\s+(is|are)\s+',
         ]
-        
+
         # Check if command includes click/select actions (standalone, not compound)
         if any(re.search(pattern, user_lower) for pattern in [
             r'^click\s+(on\s+)?(the\s+)?(first|second|third|last|any)',  # Starts with click

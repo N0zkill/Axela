@@ -6,13 +6,34 @@ from pathlib import Path
 # Load environment variables FIRST, before any other imports
 try:
     from dotenv import load_dotenv
-    env_path = Path(__file__).parent.parent / '.env'
-    load_dotenv(env_path)
-    print(f"[OK] Loaded environment from: {env_path}")
+    env_paths = [
+        Path(__file__).parent.parent / '.env',  # Project root (dev)
+        Path(os.getenv('AXELA_DATA_DIR', '')) / '.env' if os.getenv('AXELA_DATA_DIR') else None,  # User AppData (prod)
+    ]
+    # Filter out None paths
+    env_paths = [p for p in env_paths if p is not None]
+
+    env_loaded = False
+    for env_path in env_paths:
+        if env_path.exists():
+            load_dotenv(env_path, override=False)  # Don't override existing env vars
+            print(f"[OK] Loaded environment from: {env_path}")
+            env_loaded = True
+            break
+
+    if not env_loaded:
+        print(f"[INFO] No .env file found in: {env_paths}")
+        print(f"[INFO] Using environment variables from process (should work in production)")
 except ImportError:
     print("[WARNING] python-dotenv not installed")
 except Exception as e:
     print(f"[WARNING] Error loading .env: {e}")
+
+# Debug: Check if OPENAI_API_KEY is available
+if os.getenv('OPENAI_API_KEY'):
+    print(f"[OK] OPENAI_API_KEY is set (length: {len(os.getenv('OPENAI_API_KEY'))})")
+else:
+    print("[WARNING] OPENAI_API_KEY is not set in environment variables")
 
 import asyncio
 import time
@@ -202,9 +223,19 @@ class AxelaAPIServer:
                 mode = request.mode  # Use the mode from the request
 
                 print(f"\n>>> Execute Debug: mode='{mode}', command='{request.command}'\n")
+                print(f">>> AI Agent Available: {self.ai_agent.is_available()}")
+                print(f">>> Mode type: {type(mode)}, Mode repr: {repr(mode)}")
 
                 # Chat mode - conversational AI
-                if mode == "chat" and self.ai_agent.is_available():
+                if mode == "chat":
+                    print(">>> Entered chat mode block")
+                    if not self.ai_agent.is_available():
+                        print(">>> Chat mode: AI agent not available, returning error")
+                        return CommandResponse(
+                            success=False,
+                            message="Chat mode requires the AI agent to be configured and available. Please set your OPENAI_API_KEY in settings."
+                        )
+                    print(">>> Chat mode: AI agent available, processing chat response")
                     chat_response = self.ai_agent.chat_response(request.command)
                     self.successful_commands += 1
                     return CommandResponse(
@@ -214,7 +245,12 @@ class AxelaAPIServer:
                     )
 
                 # AI mode - AI interprets and executes commands
-                elif mode == "ai" and self.ai_agent.is_available():
+                elif mode == "ai":
+                    if not self.ai_agent.is_available():
+                        return CommandResponse(
+                            success=False,
+                            message="AI mode requires the AI agent to be configured and available. Please set your OPENAI_API_KEY in settings."
+                        )
                     success, message = await self._process_ai_command(request.command)
 
                     if success:
@@ -1572,7 +1608,7 @@ class AxelaAPIServer:
                             })
                         else:
                             tried_targets.append(target)
-                    
+
                     # Pass tried targets to mouse controller
                     if hasattr(self.executor.mouse, '_tried_targets'):
                         self.executor.mouse._tried_targets = tried_targets.copy()

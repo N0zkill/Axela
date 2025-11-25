@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getStartupSettings: () => ipcRenderer.invoke('get-startup-settings'),
   setStartupSettings: (settings) => ipcRenderer.invoke('set-startup-settings', settings),
 
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+
   sendCommand: (command, mode) => ipcRenderer.invoke('send-command', command, mode),
 
   showOpenDialog: (options) => ipcRenderer.invoke('show-open-dialog', options),
@@ -49,8 +51,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   }
 });
 
+let appVersion = '1.0.0';
+try {
+  const fs = require('fs');
+  const path = require('path');
+  const packagePath = path.join(__dirname, '../../package.json');
+  if (fs.existsSync(packagePath)) {
+    appVersion = JSON.parse(fs.readFileSync(packagePath, 'utf8')).version;
+  }
+} catch (e) {
+  appVersion = '1.0.0';
+}
+
 contextBridge.exposeInMainWorld('appInfo', {
-  version: require('../../package.json').version,
+  version: appVersion,
   platform: process.platform,
   arch: process.arch
 });

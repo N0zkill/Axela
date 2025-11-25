@@ -7,12 +7,12 @@ import Overlay from "./Overlay";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { useAuth } from "@/contexts/AuthContext";
 
-import { BrowserRouter as Router, Route, Routes, useLocation, Navigate } from 'react-router-dom';
+import { HashRouter as Router, Route, Routes, useLocation, Navigate } from 'react-router-dom';
 
 const PAGES = {
-    
+
     Assistant: Assistant,
-    
+
 }
 
 function _getCurrentPage(url) {
@@ -31,7 +31,7 @@ function _getCurrentPage(url) {
 // Redirect component that checks auth status
 function ConditionalRedirect() {
     const { isAuthenticated, isLoading } = useAuth();
-    
+
     if (isLoading) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-stone-950">
@@ -42,11 +42,11 @@ function ConditionalRedirect() {
             </div>
         );
     }
-    
+
     if (!isAuthenticated) {
         return <Navigate to="/signin" replace />;
     }
-    
+
     return <Navigate to="/" replace />;
 }
 
@@ -54,37 +54,37 @@ function ConditionalRedirect() {
 function PagesContent() {
     const location = useLocation();
     const currentPage = _getCurrentPage(location.pathname);
-    
+
     return (
-        <Routes>            
+        <Routes>
             {/* Public routes */}
             <Route path="/signin" element={<SignIn />} />
             <Route path="/signup" element={<SignUp />} />
             <Route path="/overlay" element={<Overlay />} />
-            
+
             {/* Protected routes */}
-            <Route 
-                path="/" 
+            <Route
+                path="/"
                 element={
                     <ProtectedRoute>
                         <Layout currentPageName={currentPage}>
                             <Assistant />
                         </Layout>
                     </ProtectedRoute>
-                } 
+                }
             />
-            
-            <Route 
-                path="/assistant" 
+
+            <Route
+                path="/assistant"
                 element={
                     <ProtectedRoute>
                         <Layout currentPageName={currentPage}>
                             <Assistant />
                         </Layout>
                     </ProtectedRoute>
-                } 
+                }
             />
-            
+
             {/* Catch all unmatched routes - redirect appropriately */}
             <Route path="*" element={<ConditionalRedirect />} />
         </Routes>

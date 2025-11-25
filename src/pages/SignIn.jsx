@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import './SignIn.css';
+import logoSmallImg from '../assets/logo_small.png';
 
 export default function SignIn() {
   const [email, setEmail] = useState('');
@@ -108,22 +109,22 @@ export default function SignIn() {
       <div className="login-wrapper">
         <div className="login-box">
           <a href="/">
-            <img 
-              src="/src/assets/logo_small.png" 
-              alt="Axela Logo" 
-              className="mx-auto mb-6 w-16 h-auto" 
+            <img
+              src={logoSmallImg}
+              alt="Axela Logo"
+              className="mx-auto mb-6 w-16 h-auto"
             />
           </a>
           <h2>Welcome Back</h2>
           <p className="subtitle">Sign in to your account</p>
 
           {error && (
-            <div style={{ 
-              color: '#ff6b6b', 
-              backgroundColor: '#2d1b1b', 
-              border: '1px solid #ff6b6b', 
-              padding: '10px', 
-              borderRadius: '8px', 
+            <div style={{
+              color: '#ff6b6b',
+              backgroundColor: '#2d1b1b',
+              border: '1px solid #ff6b6b',
+              padding: '10px',
+              borderRadius: '8px',
               marginBottom: '20px',
               fontSize: '0.9rem'
             }}>

@@ -91,15 +91,20 @@
   },
   "build": {
     "appId": "com.axela.desktop",
-    "productName": "Axela Desktop",
+    "productName": "Axela",
     "directories": {
       "output": "dist-electron"
     },
     "files": [
       "dist/**/*",
       "src/electron/**/*",
+      "src/assets/**/*",
       "backend/**/*",
-      "node_modules/**/*"
+      "node_modules/**/*",
+      "!backend/build_backend.py",
+      "!backend/build_backend.spec",
+      "!backend/dist/**",
+      "!backend/build/**"
     ],
     "extraResources": [
       {
@@ -108,7 +113,11 @@
         "filter": [
           "**/*",
           "!__pycache__",
-          "!*.pyc"
+          "!*.pyc",
+          "!dist/**",
+          "!build/**",
+          "!build_backend.py",
+          "!build_backend.spec"
         ]
       }
     ],

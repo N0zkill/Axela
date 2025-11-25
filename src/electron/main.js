@@ -1,10 +1,21 @@
 const { app, BrowserWindow, ipcMain, dialog, globalShortcut, Tray, Menu, nativeImage, net } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
-const isDev = require('electron-is-dev');
 const Store = require('electron-store');
 
-const store = new Store();
+const isDev = !app.isPackaged;
+
+function getAppPath() {
+  if (isDev) {
+    return path.join(__dirname, '..');
+  }
+  return app.getAppPath();
+}
+
+const store = new Store({
+  name: 'axela-config',
+  defaults: {}
+});
 
 class AxelaDesktop {
   constructor() {
@@ -43,14 +54,35 @@ class AxelaDesktop {
       }
     });
 
-    const startUrl = isDev
-      ? 'http://localhost:5173/overlay'
-      : `file://${path.join(__dirname, '../dist/index.html')}#/overlay`;
+    if (isDev) {
+      this.overlayWindow.loadURL('http://localhost:5173/#/overlay');
+    } else {
+      const htmlPath = path.join(getAppPath(), 'dist', 'index.html');
+      console.log('Loading overlay file:', htmlPath);
+      this.overlayWindow.loadFile(htmlPath);
+      this.overlayWindow.webContents.once('did-finish-load', () => {
+        this.overlayWindow.webContents.executeJavaScript("window.location.hash = '#/overlay'");
+      });
+    }
 
-    this.overlayWindow.loadURL(startUrl);
+    // Show overlay when ready if starting in overlay mode
+    this.overlayWindow.once('ready-to-show', () => {
+      const startInOverlayMode = store.get('startInOverlayMode', false);
+      if (startInOverlayMode) {
+        this.overlayWindow.show();
+      }
+    });
 
     this.overlayWindow.on('closed', () => {
       this.overlayWindow = null;
+    });
+
+    // Show overlay when ready (if starting in overlay mode)
+    this.overlayWindow.once('ready-to-show', () => {
+      const startInOverlayMode = store.get('startInOverlayMode', false);
+      if (startInOverlayMode && this.mainWindow && !this.mainWindow.isVisible()) {
+        this.overlayWindow.show();
+      }
     });
 
     // Ensure clicks pass through when transparent (optional, but good for overlay)
@@ -58,9 +90,15 @@ class AxelaDesktop {
   }
 
   createWindow() {
-    const iconPath = path.join(__dirname, '../assets/logo_white.png');
+    // Get icon path
+    const iconPath = isDev
+      ? path.join(__dirname, '../assets/logo_white.png')
+      : path.join(getAppPath(), 'src', 'assets', 'logo_white.png');
     let appIcon = nativeImage.createFromPath(iconPath);
-    appIcon = appIcon.resize({ width: 256, height: 256 });
+    if (!appIcon.isEmpty()) {
+      appIcon = appIcon.resize({ width: 256, height: 256 });
+    }
+
     this.mainWindow = new BrowserWindow({
       width: 1200,
       height: 800,
@@ -77,11 +115,14 @@ class AxelaDesktop {
       show: false
     });
 
-    const startUrl = isDev
-      ? 'http://localhost:5173'
-      : `file://${path.join(__dirname, '../dist/index.html')}`;
-
-    this.mainWindow.loadURL(startUrl);
+    if (isDev) {
+      this.mainWindow.loadURL('http://localhost:5173');
+    } else {
+      // In production, use loadFile which handles asar archives better
+      const htmlPath = path.join(getAppPath(), 'dist', 'index.html');
+      console.log('Loading file:', htmlPath);
+      this.mainWindow.loadFile(htmlPath);
+    }
 
     this.mainWindow.once('ready-to-show', () => {
       this.mainWindow.show();
@@ -91,6 +132,22 @@ class AxelaDesktop {
 
       if (isDev) {
         this.mainWindow.webContents.openDevTools();
+      }
+    });
+
+    // Add error handling for failed loads
+    this.mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+      console.error('Failed to load:', validatedURL, errorCode, errorDescription);
+      if (!isDev) {
+        // In production, try to show error or fallback
+        this.mainWindow.webContents.executeJavaScript(`
+          document.body.innerHTML = '<div style="padding: 20px; font-family: sans-serif;">
+            <h1>Failed to load application</h1>
+            <p>Error: ${errorDescription}</p>
+            <p>Path: ${validatedURL}</p>
+            <p>App Path: ${getAppPath()}</p>
+          </div>';
+        `);
       }
     });
 
@@ -115,19 +172,46 @@ class AxelaDesktop {
       ? path.join(__dirname, '../../backend/main.py')
       : path.join(process.resourcesPath, 'backend/main.py');
 
-    console.log('Starting Python backend:', pythonPath);
+    const pythonCommand = process.platform === 'win32' ? 'py' : 'python3';
 
     const userDataPath = app.getPath('userData');
     const configPath = path.join(userDataPath, 'config.json');
 
+    // Load environment variables
     const env = {
       ...process.env,
       AXELA_DATA_DIR: userDataPath,
       PYTHONUNBUFFERED: '1'
     };
 
-    // Use 'py' on Windows, 'python3' on others
-    const pythonCommand = process.platform === 'win32' ? 'py' : 'python3';
+    const storedApiKey = store.get('OPENAI_API_KEY');
+    if (storedApiKey) {
+      env.OPENAI_API_KEY = storedApiKey;
+    } else if (process.env.OPENAI_API_KEY) {
+      // In dev, use process.env if available
+      env.OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+    }
+
+    // Also pass other OpenAI-related env vars if they exist
+    if (process.env.OPENAI_MODEL) {
+      env.OPENAI_MODEL = process.env.OPENAI_MODEL;
+    }
+    if (process.env.OPENAI_ORG_ID) {
+      env.OPENAI_ORG_ID = process.env.OPENAI_ORG_ID;
+    }
+    if (process.env.OPENAI_MAX_TOKENS) {
+      env.OPENAI_MAX_TOKENS = process.env.OPENAI_MAX_TOKENS;
+    }
+    if (process.env.OPENAI_TEMPERATURE) {
+      env.OPENAI_TEMPERATURE = process.env.OPENAI_TEMPERATURE;
+    }
+
+    console.log('Starting Python backend:', pythonCommand, pythonPath);
+    console.log('Environment variables:', {
+      hasOpenAIKey: !!env.OPENAI_API_KEY,
+      hasAxelaDataDir: !!env.AXELA_DATA_DIR,
+      axelaDataDir: env.AXELA_DATA_DIR
+    });
 
     this.pythonProcess = spawn(pythonCommand, [
       pythonPath,
@@ -169,21 +253,29 @@ class AxelaDesktop {
   }
 
   createTray() {
-    const iconPath = path.join(__dirname, '../assets/logo_white.png');
+    // Get icon path
+    const iconPath = isDev
+      ? path.join(__dirname, '../assets/logo_white.png')
+      : path.join(getAppPath(), 'src', 'assets', 'logo_white.png');
+
     let icon = nativeImage.createFromPath(iconPath);
 
-    const size = icon.getSize();
-    if (size.width > 0) {
-      const cropRatio = 0.6;
-      const cropWidth = Math.floor(size.width * cropRatio);
-      const cropHeight = Math.floor(size.height * cropRatio);
-      const x = Math.floor((size.width - cropWidth) / 2);
-      const y = Math.floor((size.height - cropHeight) / 2);
+    // Only process if icon loaded successfully
+    if (!icon.isEmpty()) {
+      const size = icon.getSize();
+      if (size.width > 0) {
+        const cropRatio = 0.6;
+        const cropWidth = Math.floor(size.width * cropRatio);
+        const cropHeight = Math.floor(size.height * cropRatio);
+        const x = Math.floor((size.width - cropWidth) / 2);
+        const y = Math.floor((size.height - cropHeight) / 2);
 
-      icon = icon.crop({ x, y, width: cropWidth, height: cropHeight });
+        icon = icon.crop({ x, y, width: cropWidth, height: cropHeight });
+      }
+      icon = icon.resize({ width: 22, height: 22 });
     }
 
-    this.tray = new Tray(icon.resize({ width: 22, height: 22 }));
+    this.tray = new Tray(icon);
 
     const contextMenu = Menu.buildFromTemplate([
       {
@@ -441,17 +533,60 @@ class AxelaDesktop {
 
   setupIPC() {
     ipcMain.handle('get-setting', (event, key) => {
-      return store.get(key);
+      const value = store.get(key);
+      return value !== undefined ? value : null;
     });
 
     ipcMain.handle('set-setting', (event, key, value) => {
-      store.set(key, value);
+      if (value === null || value === undefined) {
+        store.delete(key);
+      } else {
+        store.set(key, value);
+      }
 
       if (key === 'launchAtStartup') {
         app.setLoginItemSettings({
-          openAtLogin: value,
+          openAtLogin: value === true,
           path: app.getPath('exe')
         });
+      }
+
+      if (key === 'OPENAI_API_KEY') {
+        try {
+          const userDataPath = app.getPath('userData');
+          const envPath = path.join(userDataPath, '.env');
+          const fs = require('fs');
+
+          let envContent = '';
+          if (fs.existsSync(envPath)) {
+            envContent = fs.readFileSync(envPath, 'utf8');
+          }
+
+          if (value && value.trim()) {
+            const keyLine = `OPENAI_API_KEY=${value.trim()}\n`;
+            if (envContent.includes('OPENAI_API_KEY=')) {
+              envContent = envContent.replace(/OPENAI_API_KEY=.*/g, keyLine.trim());
+            } else {
+              envContent += keyLine;
+            }
+            fs.writeFileSync(envPath, envContent, 'utf8');
+            console.log('OPENAI_API_KEY written to .env file:', envPath);
+          } else {
+            envContent = envContent.replace(/OPENAI_API_KEY=.*\n?/g, '');
+            fs.writeFileSync(envPath, envContent, 'utf8');
+            console.log('OPENAI_API_KEY removed from .env file');
+          }
+        } catch (error) {
+          console.error('Error writing .env file:', error);
+        }
+
+        if (this.pythonProcess) {
+          console.log('OPENAI_API_KEY updated, restarting backend...');
+          this.stopPythonBackend();
+          setTimeout(() => {
+            this.startPythonBackend();
+          }, 1000);
+        }
       }
 
       return true;
@@ -558,6 +693,16 @@ class AxelaDesktop {
       return this.isRestarting;
     });
 
+    ipcMain.handle('get-app-version', () => {
+      try {
+        const packagePath = path.join(getAppPath(), 'package.json');
+        const pkg = require(packagePath);
+        return pkg.version || '1.0.0';
+      } catch (e) {
+        return app.getVersion() || '1.0.0';
+      }
+    });
+
     ipcMain.on('chat-update-from-renderer', (event, data) => {
       if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
         this.overlayWindow.webContents.send('chat-update', data);
@@ -587,9 +732,15 @@ app.whenReady().then(() => {
     if (axelaDesktop.mainWindow) {
       axelaDesktop.mainWindow.hide();
     }
+    if (axelaDesktop.overlayWindow && !axelaDesktop.overlayWindow.isVisible()) {
+      setTimeout(() => {
+        if (axelaDesktop.overlayWindow && !axelaDesktop.overlayWindow.isDestroyed()) {
+          axelaDesktop.overlayWindow.show();
+        }
+      }, 500);
+    }
   }
 
-  // Wait for backend to start, then load hotkeys
   setTimeout(() => {
     axelaDesktop.loadAndRegisterHotkeys();
   }, 2000);

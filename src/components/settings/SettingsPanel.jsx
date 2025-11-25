@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { Input } from "@/components/ui/input";
 import { MessageSquare, Shield, Zap, Mic, Save, RefreshCw, Keyboard, LogOut } from "lucide-react";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
@@ -21,6 +22,7 @@ export default function SettingsPanel({ axelaAPI }) {
   const [availableVoices, setAvailableVoices] = useState([]);
   const [availableMicrophones, setAvailableMicrophones] = useState([]);
   const [startupSettings, setStartupSettings] = useState({ launchAtStartup: false, startInOverlayMode: false });
+  const [openaiApiKey, setOpenaiApiKey] = useState('');
   const navigate = useNavigate();
   const { signOut, user } = useAuth();
   const { toast } = useToast();
@@ -32,6 +34,17 @@ export default function SettingsPanel({ axelaAPI }) {
         setStartupSettings(settings);
       } catch (error) {
         console.error("Error loading startup settings:", error);
+      }
+    }
+  };
+
+  const loadOpenAIApiKey = async () => {
+    if (window.electronAPI?.getSetting) {
+      try {
+        const key = await window.electronAPI.getSetting('OPENAI_API_KEY');
+        setOpenaiApiKey(key || '');
+      } catch (error) {
+        console.error("Error loading OpenAI API key:", error);
       }
     }
   };
@@ -87,6 +100,7 @@ export default function SettingsPanel({ axelaAPI }) {
     loadConfig();
     loadMicrophones();
     loadStartupSettings();
+    loadOpenAIApiKey();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -133,8 +147,31 @@ export default function SettingsPanel({ axelaAPI }) {
         await window.electronAPI.setStartupSettings(startupSettings);
       }
 
+      if (window.electronAPI?.setSetting) {
+        try {
+          await window.electronAPI.setSetting('OPENAI_API_KEY', openaiApiKey || null);
+          console.log('OpenAI API key saved successfully');
+        } catch (error) {
+          console.error('Error saving OpenAI API key:', error);
+          toast({
+            title: "Error",
+            description: "Failed to save OpenAI API key. Please try again.",
+            variant: "destructive",
+          });
+        }
+      }
+
       // Reload config to ensure sync
       await loadConfig();
+
+      // Reload API key to ensure it persisted
+      await loadOpenAIApiKey();
+
+      // Show success message
+      toast({
+        title: "Settings saved",
+        description: "Your settings have been saved successfully.",
+      });
 
       // Reload hotkeys if they changed
       if (JSON.stringify(config.hotkeys) !== JSON.stringify(originalConfig.hotkeys)) {
@@ -641,6 +678,22 @@ export default function SettingsPanel({ axelaAPI }) {
                     setHasUnsavedChanges(true);
                   }}
                 />
+              </div>
+              <div>
+                <Label className="text-stone-200">OpenAI API Key</Label>
+                <Input
+                  type="password"
+                  value={openaiApiKey}
+                  onChange={(e) => {
+                    setOpenaiApiKey(e.target.value);
+                    setHasUnsavedChanges(true);
+                  }}
+                  placeholder="sk-..."
+                  className="bg-stone-800/50 border-stone-700/50 text-stone-100 mt-2"
+                />
+                <p className="text-xs text-stone-500 mt-1">
+                  Required for Chat, AI, and Agent modes. Get your key from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-orange-400 hover:underline">OpenAI</a>
+                </p>
               </div>
             </CardContent>
           </Card>

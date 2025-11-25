@@ -17,6 +17,7 @@ import {
   createMessage,
   updateConversation,
 } from "../lib/chatService";
+import logoImg from "../assets/logo.png";
 
 export default function AssistantPage() {
   const [activeTab, setActiveTab] = useState("chat");
@@ -227,7 +228,7 @@ export default function AssistantPage() {
 
   useEffect(() => {
     scrollToBottom();
-    
+
     // Send chat update to Electron for overlay
     if (window.electronAPI?.sendChatUpdate && currentConversation) {
       window.electronAPI.sendChatUpdate({
@@ -287,7 +288,7 @@ export default function AssistantPage() {
       // Update local state using functional form to avoid stale closures
       setConversations(prev => {
         const remaining = prev.filter(c => c.id !== convId);
-        
+
         // If we're deleting the current conversation, switch to another
         if (currentConversation?.id === convId) {
           if (remaining.length > 0) {
@@ -297,7 +298,7 @@ export default function AssistantPage() {
             createNewConversation();
           }
         }
-        
+
         return remaining;
       });
     } catch (error) {
@@ -392,10 +393,11 @@ export default function AssistantPage() {
       setConversations(prev => prev.map(c => c.id === conv.id ? updatedConv : c));
 
       // Execute the command
+      const executionMode = activeTab === "chat" ? "chat" : mode;
       console.log('>>> Current mode state before sending:', mode);
-      console.log('>>> Mode type:', typeof mode);
-      console.log('>>> Mode value check:', mode === 'chat', mode === 'ai', mode === 'agent', mode === 'manual');
-      const result = await axelaAPI.executeCommand(content, mode);
+      console.log('>>> Active tab:', activeTab);
+      console.log('>>> Execution mode:', executionMode);
+      const result = await axelaAPI.executeCommand(content, executionMode);
 
       // Save assistant message to database
       const { data: assistantMsgData, error: assistantMsgError } = await createMessage(conv.id, {
@@ -512,7 +514,7 @@ export default function AssistantPage() {
         <div className="p-6 border-b border-stone-800/50">
           <div className="flex items-center gap-3 mb-6">
             <div className="w-12 h-12 flex items-center justify-center">
-              <img src="/src/assets/logo.png" alt="AXELA" className="w-full h-full object-contain brightness-0 invert" />
+              <img src={logoImg} alt="AXELA" className="w-full h-full object-contain brightness-0 invert" />
             </div>
             <div>
               <h1 className="text-xl font-bold text-white">AXELA</h1>
@@ -650,7 +652,7 @@ export default function AssistantPage() {
                     animate={{ opacity: 1, scale: 1 }}
                     className="max-w-2xl">
                     <div className="w-28 h-28 flex items-center justify-center mb-4 mx-auto">
-                      <img src="/src/assets/logo.png" alt="AXELA" className="w-full h-full object-contain brightness-0 invert" />
+                      <img src={logoImg} alt="AXELA" className="w-full h-full object-contain brightness-0 invert" />
                     </div>
                     <h2 className="text-4xl font-bold mb-3 text-orange-400">
                       Hello! I'm AXELA
