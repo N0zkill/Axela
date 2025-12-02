@@ -393,7 +393,9 @@ export default function AssistantPage() {
       setConversations(prev => prev.map(c => c.id === conv.id ? updatedConv : c));
 
       // Execute the command
-      const executionMode = activeTab === "chat" ? "chat" : mode;
+      // Use the selected mode (agent, ai, manual, or chat) regardless of which tab we're on
+      // The "chat" tab is just the UI tab, not the execution mode
+      const executionMode = mode;
       console.log('>>> Current mode state before sending:', mode);
       console.log('>>> Active tab:', activeTab);
       console.log('>>> Execution mode:', executionMode);
