@@ -63,6 +63,17 @@ export default function ScriptManagementPanel() {
     loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    const handleScriptsUpdated = () => {
+      loadData();
+    };
+
+    window.addEventListener("axela-scripts-updated", handleScriptsUpdated);
+    return () => {
+      window.removeEventListener("axela-scripts-updated", handleScriptsUpdated);
+    };
+  }, [loadData]);
+
   const handleThresholdChange = async (value) => {
     if (!settings) return;
     const newThreshold = value[0];

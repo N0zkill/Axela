@@ -251,18 +251,20 @@ class AxelaAPIServer:
                             success=False,
                             message="AI mode requires the AI agent to be configured and available. Please set your OPENAI_API_KEY in settings."
                         )
-                    success, message = await self._process_ai_command(request.command)
+                    success, message, metadata = await self._process_ai_command(request.command)
 
                     if success:
                         self.successful_commands += 1
                         return CommandResponse(
                             success=True,
-                            message=message or f"Command executed successfully: {request.command}"
+                            message=message or f"Command executed successfully: {request.command}",
+                            data=metadata
                         )
                     else:
                         return CommandResponse(
                             success=False,
-                            message=message or f"Command failed: {request.command}"
+                            message=message or f"Command failed: {request.command}",
+                            data=metadata
                         )
 
                 # Agent mode - deliberate step-by-step execution with screen analysis
@@ -1447,7 +1449,130 @@ class AxelaAPIServer:
 
         return app
 
-    async def _process_ai_command(self, text: str) -> Tuple[bool, str]:
+    def _build_command_metadata(self, parsed_command: ParsedCommand, step_index: int) -> Dict[str, Any]:
+        try:
+            instruction = self.ai_agent.explain_command(parsed_command) if self.ai_agent else ""
+        except Exception:
+            instruction = ""
+
+        instruction_text = self._command_to_instruction(parsed_command)
+
+        return {
+            "step": step_index,
+            "command_type": parsed_command.command_type.value,
+            "action": parsed_command.action.value,
+            "parameters": parsed_command.parameters,
+            "raw_text": parsed_command.raw_text,
+            "description": instruction,
+            "instruction_text": instruction_text
+        }
+
+    def _command_to_instruction(self, command: ParsedCommand) -> str:
+        params = command.parameters or {}
+        ctype = command.command_type.value
+        action = command.action.value
+
+        if ctype == "mouse":
+            target = params.get("target")
+            if action == "click":
+                if target:
+                    return f"click on {target}"
+                if "x" in params and "y" in params:
+                    return f"click at {int(params['x'])}, {int(params['y'])}"
+                return "click"
+            if action == "double_click":
+                return f"double click on {target}" if target else "double click"
+            if action == "right_click":
+                return f"right click on {target}" if target else "right click"
+            if action == "drag":
+                source = params.get("source", "current position")
+                destination = params.get("destination", "target")
+                return f"drag from {source} to {destination}"
+            if action == "scroll":
+                direction = params.get("direction", "down")
+                return f"scroll {direction}"
+            if action == "move":
+                if target:
+                    return f"move mouse to {target}"
+                if "x" in params and "y" in params:
+                    return f"move mouse to {int(params['x'])}, {int(params['y'])}"
+                return "move mouse"
+
+        if ctype == "keyboard":
+            if action == "type":
+                text = params.get("text", "")
+                return f'type "{text}"' if text else "type text"
+            if action in {"key_press", "key_combo"}:
+                combo = params.get("combo") or params.get("key") or params.get("keys")
+                return f"press {combo}" if combo else "press key"
+
+        if ctype == "screenshot":
+            if action == "capture":
+                filename = params.get("filename")
+                return f"take screenshot{' as ' + filename if filename else ''}"
+            if action == "save":
+                filename = params.get("filename", "screenshot.png")
+                return f"save screenshot as {filename}"
+
+        if ctype == "system":
+            if action == "shutdown":
+                return "shutdown computer"
+            if action == "restart":
+                return "restart computer"
+            if action == "logout":
+                return "log out current user"
+            if action == "sleep":
+                return "put system to sleep"
+
+        if ctype == "file":
+            source = params.get("source")
+            destination = params.get("destination")
+            path = params.get("path")
+            if action == "open" and path:
+                return f"open {path}"
+            if action == "create" and path:
+                return f"create {path}"
+            if action == "delete" and path:
+                return f"delete {path}"
+            if action == "copy" and source and destination:
+                return f"copy {source} to {destination}"
+            if action == "move_file" and source and destination:
+                return f"move {source} to {destination}"
+            if action == "rename" and source and destination:
+                return f"rename {source} to {destination}"
+
+        if ctype == "program":
+            program = params.get("program", "")
+            if action == "start":
+                return f"start {program}".strip()
+            if action == "close":
+                return f"close {program}".strip()
+            if action == "minimize":
+                return f"minimize {program}".strip()
+            if action == "maximize":
+                return f"maximize {program}".strip()
+
+        if ctype == "web":
+            if action == "search":
+                query = params.get("query") or params.get("url") or ""
+                return f'search for "{query}"'.strip()
+            if action == "navigate":
+                url = params.get("url") or params.get("query") or ""
+                return f"go to {url}".strip()
+
+        if ctype == "utility":
+            duration = params.get("duration")
+            if action in {"wait", "delay"} and duration is not None:
+                return f"wait {duration} seconds"
+
+        return command.raw_text or f"{ctype} {action}"
+
+    async def _process_ai_command(self, text: str) -> Tuple[bool, str, Dict[str, Any]]:
+        metadata: Dict[str, Any] = {
+            "mode": "ai",
+            "original_prompt": text,
+            "commands": []
+        }
         try:
             screenshot_path = None
             if self.ai_agent.needs_visual_context(text):
@@ -1458,37 +1583,61 @@ class AxelaAPIServer:
             else:
                 ai_response = self.ai_agent.process_request(text)
 
+            metadata["warnings"] = ai_response.warnings
             if not ai_response.success:
-                return False, ai_response.explanation
+                metadata["instructions"] = []
+                metadata["instructions_text"] = ""
+                return False, ai_response.explanation, metadata
 
             # Log AI command generation for analytics
             self.logger.log_info(f"AI generated {len(ai_response.commands)} commands")
 
+            instruction_snippets: List[str] = []
             total_success = True
             messages = []
-            for parsed_command in ai_response.commands:
+            for idx, parsed_command in enumerate(ai_response.commands, start=1):
+                command_info = self._build_command_metadata(parsed_command, idx)
                 if not self.config.is_command_allowed(
                     parsed_command.command_type.value,
                     parsed_command.action.value
                 ):
                     total_success = False
                     messages.append(f"Command not allowed: {parsed_command.command_type.value}")
+                    command_info["result"] = {
+                        "success": False,
+                        "message": f"Blocked by policy: {parsed_command.command_type.value}"
+                    }
+                    metadata["commands"].append(command_info)
                     break
 
                 result = self.executor.execute(parsed_command)
+                command_info["result"] = {
+                    "success": result.success,
+                    "message": result.message
+                }
+                metadata["commands"].append(command_info)
                 if not result.success:
                     total_success = False
                     messages.append(result.message)
                     break
                 else:
                     messages.append(result.message)
+                    if command_info.get("instruction_text"):
+                        instruction_snippets.append(command_info["instruction_text"])
+
+            metadata["instructions"] = instruction_snippets
+            metadata["instructions_text"] = "; ".join(instruction_snippets)
+            metadata["ai_explanation"] = ai_response.explanation
 
             final_message = ai_response.explanation + "\n" + "\n".join(messages) if messages else ai_response.explanation
-            return total_success, final_message
+            return total_success, final_message, metadata
 
         except Exception as e:
             self.logger.log_error(f"Error in AI command processing: {e}")
-            return False, str(e)
+            metadata["error"] = str(e)
+            metadata.setdefault("instructions", [])
+            metadata.setdefault("instructions_text", "")
+            return False, str(e), metadata
 
     async def _run_agent_mode(self, text: str) -> Tuple[bool, str, Dict[str, Any]]:
         steps_output: List[Dict[str, Any]] = []

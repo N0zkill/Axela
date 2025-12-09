@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MessageCircle, Settings, Plus, Trash2, FileText, Sparkles, Circle, ChevronLeft, ChevronRight } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -10,6 +15,7 @@ import SettingsPanel from "../components/settings/SettingsPanel";
 import ScriptManagementPanel from "../components/scripts/ScriptManagementPanel";
 import { useAxelaAPI } from "../hooks/useAxelaAPI";
 import { useAuth } from "../contexts/AuthContext";
+import { Script } from "../api/entities";
 import {
   getConversationsWithMessages,
   createConversation,
@@ -17,7 +23,215 @@ import {
   createMessage,
   updateConversation,
 } from "../lib/chatService";
+import { useToast } from "@/hooks/use-toast";
 import logoImg from "../assets/logo.png";
+import { saveAiMetadata, loadAiMetadata } from "@/lib/aiMetadataCache";
+
+const SCRIPT_CATEGORIES = [
+  { value: "General", label: "General" },
+  { value: "Automation", label: "Automation" },
+  { value: "Productivity", label: "Productivity" },
+  { value: "System", label: "System" },
+  { value: "Web", label: "Web" },
+  { value: "File Management", label: "File Management" }
+];
+
+const DEFAULT_CATEGORY = SCRIPT_CATEGORIES[0].value;
+
+const generateClientId = () => {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return `cmd_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+};
+
+const formatInstructionFromCommand = (command = {}) => {
+  if (!command) return "";
+  if (command.instruction_text) {
+    return command.instruction_text;
+  }
+  if (typeof command.raw_text === "string" && command.raw_text.trim()) {
+    return command.raw_text.trim();
+  }
+
+  const params = command.parameters || {};
+  const type = (command.command_type || "").toLowerCase();
+  const action = (command.action || "").toLowerCase();
+
+  if (type === "mouse") {
+    const target = params.target;
+    if (action === "click") {
+      if (target) return `click on ${target}`;
+      if (typeof params.x === "number" && typeof params.y === "number") {
+        return `click at ${Math.round(params.x)}, ${Math.round(params.y)}`;
+      }
+      return "click";
+    }
+    if (action === "double_click") {
+      return target ? `double click on ${target}` : "double click";
+    }
+    if (action === "right_click") {
+      return target ? `right click on ${target}` : "right click";
+    }
+    if (action === "drag") {
+      const source = params.source || "current position";
+      const destination = params.destination || "target";
+      return `drag from ${source} to ${destination}`;
+    }
+    if (action === "scroll") {
+      return `scroll ${params.direction || "down"}`;
+    }
+    if (action === "move") {
+      if (target) return `move mouse to ${target}`;
+      if (typeof params.x === "number" && typeof params.y === "number") {
+        return `move mouse to ${Math.round(params.x)}, ${Math.round(params.y)}`;
+      }
+      return "move mouse";
+    }
+  }
+
+  if (type === "keyboard") {
+    if (action === "type") {
+      const text = params.text || "";
+      return text ? `type "${text}"` : "type text";
+    }
+    if (action === "key_press" || action === "key_combo") {
+      const combo = params.combo || params.key || params.keys;
+      return combo ? `press ${combo}` : "press key";
+    }
+  }
+
+  if (type === "screenshot") {
+    if (action === "capture") {
+      const filename = params.filename;
+      return `take screenshot${filename ? ` as ${filename}` : ""}`;
+    }
+    if (action === "save") {
+      const filename = params.filename || "screenshot.png";
+      return `save screenshot as ${filename}`;
+    }
+  }
+
+  if (type === "system") {
+    if (action === "shutdown") return "shutdown computer";
+    if (action === "restart") return "restart computer";
+    if (action === "logout") return "log out current user";
+    if (action === "sleep") return "put system to sleep";
+  }
+
+  if (type === "file") {
+    const source = params.source;
+    const destination = params.destination;
+    const path = params.path;
+    if (action === "open" && path) return `open ${path}`;
+    if (action === "create" && path) return `create ${path}`;
+    if (action === "delete" && path) return `delete ${path}`;
+    if (action === "copy" && source && destination) return `copy ${source} to ${destination}`;
+    if (action === "move_file" && source && destination) return `move ${source} to ${destination}`;
+    if (action === "rename" && source && destination) return `rename ${source} to ${destination}`;
+  }
+
+  if (type === "program") {
+    const program = params.program || "";
+    if (action === "start") return `start ${program}`.trim();
+    if (action === "close") return `close ${program}`.trim();
+    if (action === "minimize") return `minimize ${program}`.trim();
+    if (action === "maximize") return `maximize ${program}`.trim();
+  }
+
+  if (type === "web") {
+    if (action === "search") {
+      const query = params.query || params.url || "";
+      return `search for "${query}"`.trim();
+    }
+    if (action === "navigate") {
+      const url = params.url || params.query || "";
+      return `go to ${url}`.trim();
+    }
+  }
+
+  if (type === "utility") {
+    if ((action === "wait" || action === "delay") && params.duration !== undefined) {
+      return `wait ${params.duration} seconds`;
+    }
+  }
+
+  return `${command.command_type || ""} ${command.action || ""}`.trim();
+};
+
+const extractInstructionSources = (data = {}) => {
+  if (Array.isArray(data.commands) && data.commands.length > 0) {
+    return data.commands;
+  }
+
+  if (Array.isArray(data.instructions) && data.instructions.length > 0) {
+    return data.instructions.map((text, index) => ({
+      instruction_text: text,
+      raw_text: text,
+      description: `Step ${index + 1}`
+    }));
+  }
+
+  if (typeof data.instructions_text === "string" && data.instructions_text.trim()) {
+    return data.instructions_text
+      .split(/;\s*/)
+      .filter(Boolean)
+      .map((text, index) => ({
+        instruction_text: text.trim(),
+        raw_text: text.trim(),
+        description: `Step ${index + 1}`
+      }));
+  }
+
+  return [];
+};
+
+const buildScriptDraftFromMessage = (message) => {
+  if (!message) return null;
+  const payload = message.aiMetadata ?? message.data ?? loadAiMetadata(message.id);
+  if (!payload) return null;
+
+  const commandSources = extractInstructionSources(payload);
+  if (!commandSources.length) return null;
+
+  const instructions = commandSources
+    .map((cmd) => formatInstructionFromCommand(cmd))
+    .filter((text) => Boolean(text));
+
+  if (!instructions.length) {
+    return null;
+  }
+  const prompt = instructions.join("; ");
+  const baseNameSource = message.data.original_prompt || "";
+  const fallbackName = baseNameSource || "Saved Script";
+  const truncatedName = fallbackName.length > 60 ? `${fallbackName.slice(0, 57)}...` : fallbackName;
+
+  const commandEntries = instructions.map((text, index) => {
+    const source = commandSources[index] || {};
+    const description = source.description || `${source.command_type || ""} ${source.action || ""}`.trim();
+    return {
+      id: source.id || generateClientId(),
+      text,
+      description,
+      order: index,
+      isEnabled: source.isEnabled !== undefined
+        ? source.isEnabled
+        : (source.is_enabled !== undefined ? source.is_enabled : true),
+      command_type: source.command_type,
+      action: source.action,
+      parameters: source.parameters
+    };
+  });
+
+  return {
+    defaultName: truncatedName || "Saved Script",
+    defaultDescription: message.content || message.data.ai_explanation || "",
+    prompt,
+    instructions,
+    commands: commandEntries,
+    originalPrompt: baseNameSource
+  };
+};
 
 export default function AssistantPage() {
   const [activeTab, setActiveTab] = useState("chat");
@@ -27,12 +241,18 @@ export default function AssistantPage() {
   const [mode, setMode] = useState("ai"); // "manual", "ai", "agent", or "chat"
   const [autoSpeak, setAutoSpeak] = useState(false);
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
+  const [scriptDraft, setScriptDraft] = useState(null);
+  const [scriptName, setScriptName] = useState("");
+  const [scriptDescription, setScriptDescription] = useState("");
+  const [scriptCategory, setScriptCategory] = useState(DEFAULT_CATEGORY);
+  const [isSavingScript, setIsSavingScript] = useState(false);
   const messagesEndRef = useRef(null);
   const chatInputRef = useRef(null);
   const sendMessageRef = useRef(null);
 
   const axelaAPI = useAxelaAPI();
   const { user } = useAuth();
+  const { toast } = useToast();
 
   const loadMode = useCallback(async () => {
     try {
@@ -86,6 +306,103 @@ export default function AssistantPage() {
       setIsLoadingConversations(false);
     }
   }, [user?.id]);
+
+  const resetScriptDraft = useCallback(() => {
+    setScriptDraft(null);
+    setScriptName("");
+    setScriptDescription("");
+    setScriptCategory(DEFAULT_CATEGORY);
+  }, []);
+
+  const closeScriptModal = useCallback(() => {
+    if (isSavingScript) {
+      return;
+    }
+    resetScriptDraft();
+  }, [isSavingScript, resetScriptDraft]);
+
+  const handleSaveScriptRequest = useCallback((message) => {
+    if (!user?.id) {
+      toast({
+        title: "Sign in required",
+        description: "Please sign in to save scripts for later.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    const draft = buildScriptDraftFromMessage(message);
+    if (!draft) {
+      toast({
+        title: "Nothing to save",
+        description: "This response does not include executable steps.",
+      });
+      return;
+    }
+
+    setScriptDraft(draft);
+    setScriptName(draft.defaultName || "Saved Script");
+    setScriptDescription(draft.defaultDescription || "");
+    setScriptCategory(DEFAULT_CATEGORY);
+  }, [toast, user?.id]);
+
+  const handleCreateScript = useCallback(async () => {
+    if (!scriptDraft || !user?.id) {
+      return;
+    }
+
+    const trimmedName = scriptName.trim();
+    if (!trimmedName) {
+      toast({
+        title: "Script name required",
+        description: "Please provide a name for this script.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setIsSavingScript(true);
+    try {
+      const commandsPayload = scriptDraft.commands.map((command, index) => ({
+        id: command.id || generateClientId(),
+        text: command.text,
+        description: command.description || "",
+        order: index,
+        isEnabled: command.isEnabled !== undefined ? command.isEnabled : true,
+        command_type: command.command_type,
+        action: command.action,
+        parameters: command.parameters
+      }));
+
+      await Script.create(user.id, {
+        name: trimmedName,
+        prompt: scriptDraft.prompt || commandsPayload.map((cmd) => cmd.text).join("; "),
+        description: scriptDescription.trim(),
+        category: scriptCategory,
+        commands: commandsPayload,
+        is_recurring: false,
+        recurring_enabled: false
+      });
+
+      toast({
+        title: "Script saved",
+        description: `${trimmedName} is now available in the Scripts tab.`
+      });
+      resetScriptDraft();
+      if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+        window.dispatchEvent(new Event("axela-scripts-updated"));
+      }
+    } catch (error) {
+      console.error("Error saving script:", error);
+      toast({
+        title: "Failed to save script",
+        description: error?.message || "Please try again.",
+        variant: "destructive"
+      });
+    } finally {
+      setIsSavingScript(false);
+    }
+  }, [scriptDraft, scriptName, scriptDescription, scriptCategory, resetScriptDraft, toast, user?.id]);
 
   // Separate useEffect for initial setup - only run once on mount
   useEffect(() => {
@@ -225,6 +542,11 @@ export default function AssistantPage() {
       return cleanup;
     }
   }, []); // Only set up once - ref pattern handles stale closures
+
+  const scriptInstructionsPreview = scriptDraft
+    ? scriptDraft.commands.map((cmd, index) => `${index + 1}. ${cmd.text}`).join("\n")
+    : "";
+  const disableScriptSave = !scriptDraft || !scriptName.trim() || !scriptDraft.commands.length || isSavingScript;
 
   useEffect(() => {
     scrollToBottom();
@@ -421,8 +743,13 @@ export default function AssistantPage() {
         role: assistantMsgData.role,
         timestamp: assistantMsgData.created_at,
         success: assistantMsgData.success,
-        data: assistantMsgData.data
+        data: assistantMsgData.data ?? result.data ?? null,
+        aiMetadata: result.data ?? assistantMsgData.data ?? null
       };
+
+      if (assistantMessage.aiMetadata) {
+        saveAiMetadata(assistantMessage.id, assistantMessage.aiMetadata);
+      }
 
       const finalMessages = [...updatedMessages, assistantMessage];
 
@@ -677,9 +1004,13 @@ export default function AssistantPage() {
                 </div>
               ) : (
                 <div className="max-w-4xl mx-auto space-y-4">
-                  <AnimatePresence>
+                    <AnimatePresence>
                     {currentConversation.messages.map((msg) => (
-                      <ChatMessage key={msg.id} message={msg} />
+                      <ChatMessage
+                        key={msg.id}
+                        message={msg}
+                        onSaveScript={handleSaveScriptRequest}
+                      />
                     ))}
                   </AnimatePresence>
                   <div ref={messagesEndRef} />
@@ -711,6 +1042,87 @@ export default function AssistantPage() {
           </TabsContent>
         </Tabs>
       </div>
+      <Dialog open={Boolean(scriptDraft)} onOpenChange={(open) => {
+        if (!open) {
+          closeScriptModal();
+        }
+      }}>
+        <DialogContent className="bg-stone-950 border border-stone-800/60 text-stone-100 max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Save Script</DialogTitle>
+            <DialogDescription className="text-stone-400">
+              Store these AI-generated steps so you can replay them from the Scripts tab later.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="script-name" className="text-sm">Script Name</Label>
+              <Input
+                id="script-name"
+                value={scriptName}
+                onChange={(e) => setScriptName(e.target.value)}
+                placeholder="Give this script a memorable name"
+                className="bg-stone-900 border-stone-700"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="script-description" className="text-sm">Description</Label>
+              <Textarea
+                id="script-description"
+                value={scriptDescription}
+                onChange={(e) => setScriptDescription(e.target.value)}
+                placeholder="Optional: describe what this script accomplishes"
+                className="min-h-[80px] bg-stone-900 border-stone-700 resize-none"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-sm">Category</Label>
+              <Select value={scriptCategory} onValueChange={setScriptCategory}>
+                <SelectTrigger className="bg-stone-900 border-stone-700">
+                  <SelectValue placeholder="Choose a category" />
+                </SelectTrigger>
+                <SelectContent>
+                  {SCRIPT_CATEGORIES.map((category) => (
+                    <SelectItem key={category.value} value={category.value}>
+                      {category.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-sm">Instructions</Label>
+              <Textarea
+                value={scriptInstructionsPreview}
+                readOnly
+                className="min-h-[140px] bg-stone-900 border-stone-800 text-stone-200 font-mono text-xs"
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={closeScriptModal}
+              disabled={isSavingScript}
+              className="border-stone-700 text-stone-300 hover:text-orange-400 hover:border-orange-500/60"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={handleCreateScript}
+              disabled={disableScriptSave}
+              className="bg-orange-500 hover:bg-orange-600 text-white border-0"
+            >
+              {isSavingScript ? "Saving..." : "Save Script"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

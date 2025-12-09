@@ -1,32 +1,59 @@
 import React from "react";
-import { Bot, User, Copy, Check, AlertCircle, Volume2, VolumeX } from "lucide-react";
+import { Bot, User, Copy, Check, AlertCircle, Volume2, VolumeX, BookmarkPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { motion } from "framer-motion";
 import { format } from "date-fns";
+import { loadAiMetadata, saveAiMetadata } from "@/lib/aiMetadataCache";
 
-export default function ChatMessage({ message }) {
+export default function ChatMessage({ message, onSaveScript }) {
   const [copied, setCopied] = React.useState(false);
   const [isSpeaking, setIsSpeaking] = React.useState(false);
   const isUser = message.role === "user" || message.sender === "user";
   const isError = message.success === false;
   let structuredData = null;
+  let rawData = message?.aiMetadata ?? message?.data ?? null;
 
-  if (message?.data) {
-    if (typeof message.data === "string") {
+  if (rawData) {
+    if (typeof rawData === "string") {
       try {
-        structuredData = JSON.parse(message.data);
+        structuredData = JSON.parse(rawData);
       } catch {
         // Ignore malformed JSON payloads
         structuredData = null;
       }
     } else {
-      structuredData = message.data;
+      structuredData = rawData;
+    }
+  } else if (message?.id) {
+    rawData = loadAiMetadata(message.id);
+    if (rawData) {
+      structuredData = rawData;
     }
   }
+
+  React.useEffect(() => {
+    if (message?.id && structuredData) {
+      saveAiMetadata(message.id, structuredData);
+    }
+  }, [message?.id, structuredData]);
 
   const agentSteps = structuredData?.mode === "agent" && Array.isArray(structuredData?.steps)
     ? structuredData.steps
     : [];
+
+  const aiCommandList = Array.isArray(structuredData?.commands) ? structuredData.commands : [];
+  const instructionFallback = Array.isArray(structuredData?.instructions)
+    ? structuredData.instructions
+    : (
+        typeof structuredData?.instructions_text === "string"
+          ? structuredData.instructions_text.split(/;\s*/).filter(Boolean)
+          : []
+      );
+
+  const canSaveScript =
+    !isUser &&
+    typeof onSaveScript === "function" &&
+    (aiCommandList.length > 0 || instructionFallback.length > 0);
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(message.content);
@@ -169,6 +196,18 @@ export default function ChatMessage({ message }) {
                     <Volume2 className="w-3 h-3 text-stone-400" />
                   )}
                 </Button>
+
+                {canSaveScript && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 hover:bg-stone-700/50 rounded-lg"
+                    onClick={() => onSaveScript(message)}
+                    title="Save as script"
+                  >
+                    <BookmarkPlus className="w-3 h-3 text-stone-400" />
+                  </Button>
+                )}
 
                 <Button
                   variant="ghost"
