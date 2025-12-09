@@ -10,16 +10,18 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { UserSettings, Script } from "@/api/entities";
-import { FileText, Trash2, SlidersHorizontal, Info, Plus, Save, Play, Search, RefreshCw, PlusCircle, Edit, Square } from "lucide-react";
+import { FileText, Trash2, SlidersHorizontal, Info, Plus, Save, Play, Search, RefreshCw, PlusCircle, Edit, Square, Download, Upload } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import CommandBlock from "./CommandBlock";
 import { generateCommandText } from "@/api/commandBlocks";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAxelaAPI } from "@/hooks/useAxelaAPI";
+import { useToast } from "@/hooks/use-toast";
 
 export default function ScriptManagementPanel() {
   const { user } = useAuth();
   const axelaAPI = useAxelaAPI();
+  const { toast } = useToast();
   const [settings, setSettings] = useState(null);
   const [scripts, setScripts] = useState([]);
   const [newScript, setNewScript] = useState({ name: "", description: "", category: "General" });
@@ -571,6 +573,185 @@ export default function ScriptManagementPanel() {
     await loadData();
   };
 
+  const exportScripts = (scriptsToExport = null) => {
+    try {
+      const scriptsToSave = scriptsToExport || scripts;
+      
+      if (scriptsToSave.length === 0) {
+        toast({
+          title: "No scripts to export",
+          description: "There are no scripts available to export.",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      // Prepare export data
+      const exportData = {
+        version: "1.0",
+        exportDate: new Date().toISOString(),
+        scripts: scriptsToSave.map(script => ({
+          name: script.name,
+          prompt: script.prompt,
+          description: script.description,
+          category: script.category,
+          commands: script.commands || [],
+          is_recurring: script.is_recurring || false,
+          recurring_interval: script.recurring_interval || null,
+          recurring_enabled: script.recurring_enabled || false
+        }))
+      };
+
+      // Create and download JSON file
+      const dataStr = JSON.stringify(exportData, null, 2);
+      const dataBlob = new Blob([dataStr], { type: 'application/json' });
+      const url = URL.createObjectURL(dataBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `axela-scripts-${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: "Scripts exported",
+        description: `Successfully exported ${scriptsToSave.length} script(s).`
+      });
+    } catch (error) {
+      console.error("Error exporting scripts:", error);
+      toast({
+        title: "Export failed",
+        description: error.message || "Failed to export scripts.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const importScripts = async () => {
+    try {
+      // Create file input element
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json';
+      input.style.display = 'none';
+      
+      input.onchange = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) {
+          document.body.removeChild(input);
+          return;
+        }
+
+        try {
+          const text = await file.text();
+          const importData = JSON.parse(text);
+
+          // Validate import data
+          if (!importData.scripts || !Array.isArray(importData.scripts)) {
+            throw new Error("Invalid file format. Expected a scripts array.");
+          }
+
+          if (!user?.id) {
+            throw new Error("User not authenticated");
+          }
+
+          let importedCount = 0;
+          let skippedCount = 0;
+          const errors = [];
+
+          // Import each script
+          for (const scriptData of importData.scripts) {
+            try {
+              // Validate required fields
+              if (!scriptData.name || !scriptData.commands || !Array.isArray(scriptData.commands)) {
+                skippedCount++;
+                errors.push(`Skipped "${scriptData.name || 'Unnamed'}": Missing required fields`);
+                continue;
+              }
+
+              // Check if script with same name already exists
+              const existingScript = scripts.find(s => s.name === scriptData.name);
+              if (existingScript) {
+                // Skip duplicates or you could rename them
+                skippedCount++;
+                errors.push(`Skipped "${scriptData.name}": Script with this name already exists`);
+                continue;
+              }
+
+              // Create the script
+              const scriptPayload = {
+                name: scriptData.name,
+                prompt: scriptData.prompt || scriptData.commands.map(cmd => cmd.text).join('; '),
+                description: scriptData.description || '',
+                category: scriptData.category || 'General',
+                commands: scriptData.commands.map((cmd, index) => ({
+                  id: cmd.id || `cmd_${Date.now()}_${index}`,
+                  text: cmd.text,
+                  description: cmd.description || '',
+                  order: cmd.order !== undefined ? cmd.order : index,
+                  isEnabled: cmd.isEnabled !== undefined ? cmd.isEnabled : true,
+                  command_type: cmd.command_type,
+                  action: cmd.action,
+                  parameters: cmd.parameters
+                })),
+                is_recurring: scriptData.is_recurring || false,
+                recurring_interval: scriptData.recurring_interval || null,
+                recurring_enabled: scriptData.recurring_enabled || false
+              };
+
+              await Script.create(user.id, scriptPayload);
+              importedCount++;
+            } catch (error) {
+              skippedCount++;
+              errors.push(`Failed to import "${scriptData.name || 'Unnamed'}": ${error.message}`);
+            }
+          }
+
+          // Refresh scripts list
+          await loadData();
+
+          // Show results
+          if (importedCount > 0) {
+            toast({
+              title: "Import successful",
+              description: `Imported ${importedCount} script(s)${skippedCount > 0 ? `, skipped ${skippedCount}` : ''}.`
+            });
+          } else {
+            toast({
+              title: "Import failed",
+              description: `No scripts were imported. ${errors.length > 0 ? errors[0] : 'Unknown error'}`,
+              variant: "destructive"
+            });
+          }
+
+          if (errors.length > 0 && importedCount > 0) {
+            console.warn("Import errors:", errors);
+          }
+        } catch (error) {
+          console.error("Error importing scripts:", error);
+          toast({
+            title: "Import failed",
+            description: error.message || "Failed to import scripts. Please check the file format.",
+            variant: "destructive"
+          });
+        } finally {
+          document.body.removeChild(input);
+        }
+      };
+
+      document.body.appendChild(input);
+      input.click();
+    } catch (error) {
+      console.error("Error setting up import:", error);
+      toast({
+        title: "Import failed",
+        description: error.message || "Failed to open file picker.",
+        variant: "destructive"
+      });
+    }
+  };
+
   if (!settings) {
     return (
       <div className="flex justify-center items-center h-full">
@@ -828,14 +1009,36 @@ export default function ScriptManagementPanel() {
                   </div>
                   Saved Scripts
                 </CardTitle>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={refreshScripts}
-                  className="h-8 border-stone-700 hover:border-orange-500/50 hover:bg-orange-500/10 text-stone-300 hover:text-orange-400"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={importScripts}
+                    className="h-8 border-stone-700 hover:border-orange-500/50 hover:bg-orange-500/10 text-stone-300 hover:text-orange-400"
+                    title="Import scripts from file"
+                  >
+                    <Upload className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => exportScripts()}
+                    disabled={scripts.length === 0}
+                    className="h-8 border-stone-700 hover:border-orange-500/50 hover:bg-orange-500/10 text-stone-300 hover:text-orange-400"
+                    title="Export all scripts to file"
+                  >
+                    <Download className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={refreshScripts}
+                    className="h-8 border-stone-700 hover:border-orange-500/50 hover:bg-orange-500/10 text-stone-300 hover:text-orange-400"
+                    title="Refresh scripts"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </Button>
+                </div>
               </div>
 
               <div className="flex gap-2">
@@ -923,8 +1126,18 @@ export default function ScriptManagementPanel() {
                                 <Button
                                   variant="ghost"
                                   size="sm"
+                                  className="h-8 w-8 p-0 text-purple-400 hover:text-purple-300 hover:bg-purple-500/10"
+                                  onClick={() => exportScripts([script])}
+                                  title="Export this script"
+                                >
+                                  <Download className="w-4 h-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
                                   className="h-8 w-8 p-0 text-blue-400 hover:text-blue-300 hover:bg-blue-500/10"
                                   onClick={() => editScript(script)}
+                                  title="Edit script"
                                 >
                                   <Edit className="w-4 h-4" />
                                 </Button>
@@ -933,6 +1146,7 @@ export default function ScriptManagementPanel() {
                                   size="sm"
                                   className="h-8 w-8 p-0 text-red-400 hover:text-red-300 hover:bg-red-500/10"
                                   onClick={() => deleteScript(script.id)}
+                                  title="Delete script"
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </Button>
