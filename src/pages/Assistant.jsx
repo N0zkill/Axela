@@ -24,6 +24,7 @@ import {
   updateConversation,
 } from "../lib/chatService";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "../lib/supabaseClient";
 import logoImg from "../assets/logo.png";
 import { saveAiMetadata, loadAiMetadata } from "@/lib/aiMetadataCache";
 
@@ -548,6 +549,90 @@ export default function AssistantPage() {
     : "";
   const disableScriptSave = !scriptDraft || !scriptName.trim() || !scriptDraft.commands.length || isSavingScript;
 
+  // Realtime subscription for new messages in current conversation
+  useEffect(() => {
+    if (!currentConversation?.id || !user?.id) {
+      return;
+    }
+
+    const conversationId = currentConversation.id;
+    console.log('[Chat] Setting up realtime subscription for conversation:', conversationId);
+
+    const channel = supabase
+      .channel(`messages_${conversationId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        (payload) => {
+          const newMessage = payload.new;
+          console.log('[Chat] New message received via realtime:', newMessage);
+
+          // Add new message to current conversation without animations
+          const message = {
+            id: newMessage.id,
+            content: newMessage.content,
+            role: newMessage.role,
+            timestamp: newMessage.created_at,
+            success: newMessage.success,
+            data: newMessage.data,
+          };
+
+          setCurrentConversation((prev) => {
+            if (!prev || prev.id !== conversationId) {
+              return prev;
+            }
+            // Check if message already exists (avoid duplicates)
+            const messageExists = prev.messages?.some((msg) => msg.id === newMessage.id);
+            if (messageExists) {
+              console.log('[Chat] Message already exists, skipping');
+              return prev;
+            }
+            return {
+              ...prev,
+              messages: [...(prev.messages || []), message],
+              updatedAt: new Date().toISOString(),
+            };
+          });
+
+          setConversations((prev) =>
+            prev.map((conv) => {
+              if (conv.id !== conversationId) {
+                return conv;
+              }
+              // Check if message already exists (avoid duplicates)
+              const messageExists = conv.messages?.some((msg) => msg.id === newMessage.id);
+              if (messageExists) {
+                return conv;
+              }
+              return {
+                ...conv,
+                messages: [...(conv.messages || []), message],
+                updatedAt: new Date().toISOString(),
+              };
+            })
+          );
+
+          // Scroll to bottom when new message arrives
+          setTimeout(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+          }, 100);
+        }
+      )
+      .subscribe((status) => {
+        console.log('[Chat] Realtime subscription status:', status);
+      });
+
+    return () => {
+      console.log('[Chat] Cleaning up realtime subscription');
+      supabase.removeChannel(channel);
+    };
+  }, [currentConversation?.id, user?.id]);
+
   useEffect(() => {
     scrollToBottom();
 
@@ -1004,7 +1089,7 @@ export default function AssistantPage() {
                 </div>
               ) : (
                 <div className="max-w-4xl mx-auto space-y-4">
-                    <AnimatePresence>
+                  <AnimatePresence>
                     {currentConversation.messages.map((msg) => (
                       <ChatMessage
                         key={msg.id}
