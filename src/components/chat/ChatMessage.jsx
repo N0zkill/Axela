@@ -51,16 +51,16 @@ export default function ChatMessage({ message }) {
       try {
         setIsSpeaking(true);
         console.log("Sending TTS request for:", message.content.substring(0, 50));
-        
+
         const response = await fetch('http://127.0.0.1:8000/speak', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: message.content, blocking: false })
         });
-        
+
         const result = await response.json();
         console.log("TTS API response:", result);
-        
+
         if (!result.success) {
           console.error("TTS failed:", result.message);
           alert(`TTS Error: ${result.message}`);
@@ -83,10 +83,7 @@ export default function ChatMessage({ message }) {
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2 }}
+    <div
       className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}
     >
       {!isUser && (
@@ -202,6 +199,6 @@ export default function ChatMessage({ message }) {
           </div>
         </div>
       )}
-    </motion.div>
+    </div>
   );
 }

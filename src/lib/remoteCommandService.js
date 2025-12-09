@@ -13,6 +13,9 @@ import { getDesktopInstanceId } from './desktopInstanceService';
  * @param {Function} onError - Callback for errors
  * @returns {Function} Unsubscribe function
  */
+// Track processed command IDs to prevent duplicates
+const processedCommandIds = new Set();
+
 export function subscribeToRemoteCommands(onCommand, onError) {
   // Get current user
   const getCurrentUser = async () => {
@@ -22,6 +25,7 @@ export function subscribeToRemoteCommands(onCommand, onError) {
 
   let subscription = null;
   let isSubscribed = false;
+  let subscriptionPromise = null;
 
   const setupSubscription = async () => {
     try {
@@ -48,7 +52,13 @@ export function subscribeToRemoteCommands(onCommand, onError) {
           },
           async (payload) => {
             const command = payload.new;
-            console.log('[RemoteCommands] New command received:', command);
+            console.log('[RemoteCommands] New command received via realtime:', command);
+
+            // Deduplication: Check if we've already processed this command
+            if (processedCommandIds.has(command.id)) {
+              console.log('[RemoteCommands] Command already processed, ignoring:', command.id);
+              return;
+            }
 
             // Check if command is targeted to this instance or no specific instance
             const isTargetedToThisInstance =
@@ -62,9 +72,43 @@ export function subscribeToRemoteCommands(onCommand, onError) {
 
             // Only process pending commands
             if (command.status === 'pending') {
+              // Check again if already processed (race condition protection)
+              if (processedCommandIds.has(command.id)) {
+                console.log('[RemoteCommands] Command already being processed, ignoring:', command.id);
+                return;
+              }
+
+              // Mark as being processed immediately to prevent duplicates
+              processedCommandIds.add(command.id);
+
+              // Clean up old processed IDs (keep last 100)
+              if (processedCommandIds.size > 100) {
+                const firstId = processedCommandIds.values().next().value;
+                processedCommandIds.delete(firstId);
+              }
+
               try {
-                // Mark as executing
-                await updateCommandStatus(command.id, 'executing', null, null);
+                // Atomically update status from 'pending' to 'executing' to prevent race conditions
+                // This ensures only one process (polling or realtime) can claim the command
+                const { data: updateData, error: updateError } = await supabase
+                  .from('remote_commands')
+                  .update({
+                    status: 'executing',
+                    executed_at: new Date().toISOString()
+                  })
+                  .eq('id', command.id)
+                  .eq('status', 'pending') // Only update if still pending
+                  .select()
+                  .single();
+
+                if (updateError || !updateData) {
+                  // Command was already picked up by another process (polling or realtime)
+                  console.log('[RemoteCommands] Command already claimed by another process, ignoring:', command.id);
+                  processedCommandIds.delete(command.id);
+                  return;
+                }
+
+                console.log('[RemoteCommands] Successfully claimed command for processing:', command.id);
 
                 // Call the handler
                 if (onCommand) {
@@ -72,6 +116,8 @@ export function subscribeToRemoteCommands(onCommand, onError) {
                 }
               } catch (error) {
                 console.error('[RemoteCommands] Error processing command:', error);
+                // Remove from processed set on error so it can be retried
+                processedCommandIds.delete(command.id);
                 await updateCommandStatus(
                   command.id,
                   'failed',
@@ -89,6 +135,22 @@ export function subscribeToRemoteCommands(onCommand, onError) {
           console.log('[RemoteCommands] Subscription status:', status);
           if (status === 'SUBSCRIBED') {
             isSubscribed = true;
+            console.log('[RemoteCommands] ✅ Successfully subscribed to remote commands');
+          } else if (status === 'CHANNEL_ERROR') {
+            console.error('[RemoteCommands] ❌ Channel error - subscription failed');
+            isSubscribed = false;
+            if (onError) {
+              onError(new Error('Realtime subscription failed'));
+            }
+          } else if (status === 'TIMED_OUT') {
+            console.error('[RemoteCommands] ❌ Subscription timed out');
+            isSubscribed = false;
+            if (onError) {
+              onError(new Error('Realtime subscription timed out'));
+            }
+          } else if (status === 'CLOSED') {
+            console.log('[RemoteCommands] Subscription closed');
+            isSubscribed = false;
           }
         });
 
@@ -102,8 +164,8 @@ export function subscribeToRemoteCommands(onCommand, onError) {
     }
   };
 
-  // Initialize subscription
-  setupSubscription();
+  // Initialize subscription and wait for it
+  subscriptionPromise = setupSubscription();
 
   // Return unsubscribe function
   return () => {
@@ -113,6 +175,7 @@ export function subscribeToRemoteCommands(onCommand, onError) {
       subscription = null;
       isSubscribed = false;
     }
+    subscriptionPromise = null;
   };
 }
 
