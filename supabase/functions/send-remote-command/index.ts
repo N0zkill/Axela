@@ -123,8 +123,9 @@ serve(async (req) => {
       }
     }
 
-    // Determine mode (default to command_type if not specified)
-    const finalMode = mode || command_type;
+    // Determine mode (only for non-script commands)
+    // Script commands should not have a mode (database constraint)
+    const finalMode = command_type === 'script' ? null : (mode || command_type);
 
     // If desktop_instance_id is provided, verify it exists and belongs to the user
     if (desktop_instance_id) {

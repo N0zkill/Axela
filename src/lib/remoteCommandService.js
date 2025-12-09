@@ -4,8 +4,9 @@
  */
 
 import { supabase } from './supabaseClient';
-import { useAxelaAPI } from '@/hooks/useAxelaAPI';
 import { getDesktopInstanceId } from './desktopInstanceService';
+import { getScript } from './scriptService';
+import { Script } from '@/api/entities';
 
 /**
  * Subscribe to remote commands for the current user
@@ -262,34 +263,41 @@ export async function executeRemoteCommand(command, axelaAPI) {
 
     switch (command.command_type) {
       case 'script':
-        // Execute script by ID
+        // Execute script by ID from Supabase
         if (!command.script_id) {
           throw new Error('Script ID is required for script commands');
         }
-        // Execute script via API
-        const scriptResponse = await fetch(
-          `http://127.0.0.1:8000/scripts/${command.script_id}/execute`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({}),
-          }
-        );
 
-        if (!scriptResponse.ok) {
-          const errorData = await scriptResponse.json().catch(() => ({}));
-          throw new Error(
-            errorData.message || `Failed to execute script: ${scriptResponse.statusText}`
-          );
+        // Fetch script from Supabase
+        console.log('[RemoteCommands] Fetching script from Supabase:', command.script_id);
+        const { data: scriptData, error: scriptError } = await getScript(command.script_id);
+
+        if (scriptError || !scriptData) {
+          throw new Error(`Script not found: ${scriptError?.message || 'Unknown error'}`);
         }
 
-        const scriptData = await scriptResponse.json();
+        if (scriptData.is_active === false) {
+          console.warn('[RemoteCommands] Script is marked as inactive, but executing anyway (command was queued when active)');
+        }
+
+        const script = new Script({
+          ...scriptData,
+          created_date: scriptData.created_at,
+          updated_date: scriptData.updated_at,
+          isActive: scriptData.is_active,
+          isFavorite: scriptData.is_favorite,
+          lastExecuted: scriptData.last_executed,
+        });
+
+        console.log('[RemoteCommands] Executing script:', script.name, 'with', script.commands.length, 'commands');
+        const executionResult = await script.execute(axelaAPI, userId);
+
         result = {
-          success: scriptData.success !== false,
-          message: scriptData.message || 'Script executed successfully',
-          data: scriptData,
+          success: executionResult.success,
+          message: executionResult.success
+            ? `Script "${executionResult.scriptName}" executed: ${executionResult.executedCommands}/${executionResult.totalCommands} commands successful`
+            : `Script "${executionResult.scriptName}" failed: ${executionResult.executedCommands}/${executionResult.totalCommands} commands executed`,
+          data: executionResult,
         };
         break;
 
