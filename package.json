@@ -64,6 +64,7 @@
     "sonner": "^2.0.1",
     "tailwind-merge": "^3.0.2",
     "tailwindcss-animate": "^1.0.7",
+    "uuid": "^13.0.0",
     "vaul": "^1.1.2",
     "zod": "^3.24.2"
   },
@@ -104,7 +105,14 @@
       "!backend/build_backend.py",
       "!backend/build_backend.spec",
       "!backend/dist/**",
-      "!backend/build/**"
+      "!backend/build/**",
+      "!backend/logs/**",
+      "!backend/screenshots/**",
+      "!backend/**/__pycache__/**",
+      "!backend/**/*.pyc",
+      "!backend/**/*.log",
+      "!backend/**/*.mp3",
+      "!backend/**/session_*.json"
     ],
     "extraResources": [
       {
@@ -112,12 +120,19 @@
         "to": "backend",
         "filter": [
           "**/*",
-          "!__pycache__",
+          "!__pycache__/**",
+          "!**/__pycache__/**",
           "!*.pyc",
+          "!**/*.pyc",
           "!dist/**",
           "!build/**",
+          "!logs/**",
+          "!screenshots/**",
           "!build_backend.py",
-          "!build_backend.spec"
+          "!build_backend.spec",
+          "!**/*.log",
+          "!**/*.mp3",
+          "!**/session_*.json"
         ]
       }
     ],
