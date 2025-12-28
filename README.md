@@ -5,6 +5,15 @@ Built as a **senior project**, this agent bridges human interaction and computer
 
 ---
 
+## 📱 Mobile Version
+
+Axela also includes a mobile companion app that allows remote access and mobile connectivity.
+
+Mobile App Repository:
+👉 [https://github.com/N0zkill/AxelaMobile](https://github.com/N0zkill/AxelaMobile)
+
+---
+
 ## 🚀 Features
 
 ### 🔧 System Control
@@ -20,7 +29,7 @@ Built as a **senior project**, this agent bridges human interaction and computer
 
 ### 🌐 Connectivity
 - 🌍 Perform web searches  
-- 📱 Mobile connectivity (remote use)  
+- 📱 Mobile connectivity (remote use)
 - 📞 Make phone calls *(planned/experimental)*  
 
 ### 🧩 Customization & Extensions
